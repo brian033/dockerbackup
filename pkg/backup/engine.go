@@ -72,12 +72,12 @@ func NewDefaultBackupEngine(arch archive.ArchiveHandler, dc docker.DockerClient,
 }
 
 type backupMetadata struct {
-	Version        int       `json:"version"`
-	CreatedAt      time.Time `json:"createdAt"`
-	ContainerID    string    `json:"containerID"`
-	ContainerName  string    `json:"containerName"`
-	Engine         string    `json:"engine"`
-	IncludesVolumes bool     `json:"includesVolumes"`
+	Version         int       `json:"version"`
+	CreatedAt       time.Time `json:"createdAt"`
+	ContainerID     string    `json:"containerID"`
+	ContainerName   string    `json:"containerName"`
+	Engine          string    `json:"engine"`
+	IncludesVolumes bool      `json:"includesVolumes"`
 }
 
 func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest) (*BackupResult, error) {
@@ -181,7 +181,40 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 }
 
 func (e *DefaultBackupEngine) Validate(ctx context.Context, backupPath string) (*ValidationResult, error) {
-	return nil, errors.ErrNotImplemented
+	entries, err := e.archiveHandler.ListArchive(ctx, backupPath)
+	if err != nil {
+		return nil, &errors.OperationError{Op: "list archive", Err: err}
+	}
+	// Required top-level items
+	required := map[string]bool{
+		"container.json": false,
+		"filesystem.tar": false,
+		"metadata.json":  false,
+	}
+	for _, en := range entries {
+		// Normalize names to forward slashes in tar
+		switch en.Path {
+		case "container.json":
+			required["container.json"] = true
+		case "filesystem.tar":
+			required["filesystem.tar"] = true
+		case "metadata.json":
+			required["metadata.json"] = true
+		}
+	}
+	missing := make([]string, 0)
+	for name, ok := range required {
+		if !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return &ValidationResult{
+			Valid:   false,
+			Details: fmt.Sprintf("missing required entries: %v", missing),
+		}, nil
+	}
+	return &ValidationResult{Valid: true, Details: "backup structure is valid"}, nil
 }
 
 func safeName(name string) string {
