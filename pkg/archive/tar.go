@@ -18,32 +18,40 @@ import (
 // If DestPath is provided, it is used as the root path (for directories)
 // or the exact file path (for files) inside the archive.
 // If DestPath is empty, the base name of Path is used.
- type ArchiveSource struct {
+type ArchiveSource struct {
 	Path     string
 	DestPath string
 }
 
 // ArchiveEntry is a lightweight description returned by ListArchive.
- type ArchiveEntry struct {
+type ArchiveEntry struct {
 	Path string
 	Size int64
 	Mode int64
 	Type string
 }
 
- type ArchiveHandler interface {
+type ArchiveHandler interface {
 	CreateArchive(ctx context.Context, sources []ArchiveSource, dest string) error
 	ExtractArchive(ctx context.Context, archivePath, destDir string) error
 	ListArchive(ctx context.Context, archivePath string) ([]ArchiveEntry, error)
 }
 
- type TarArchiveHandler struct{}
-
- func NewTarArchiveHandler() *TarArchiveHandler {
-	return &TarArchiveHandler{}
+type TarArchiveHandler struct {
+	compressionLevel int
 }
 
- func (h *TarArchiveHandler) CreateArchive(ctx context.Context, sources []ArchiveSource, dest string) error {
+func NewTarArchiveHandler() *TarArchiveHandler {
+	return &TarArchiveHandler{compressionLevel: DefaultCompressionLevel}
+}
+
+func (h *TarArchiveHandler) SetCompressionLevel(level int) {
+	if level >= gzip.HuffmanOnly && level <= gzip.BestCompression {
+		h.compressionLevel = level
+	}
+}
+
+func (h *TarArchiveHandler) CreateArchive(ctx context.Context, sources []ArchiveSource, dest string) error {
 	if len(sources) == 0 {
 		return fmt.Errorf("no sources provided for archive creation")
 	}
@@ -57,12 +65,22 @@ import (
 	}
 	defer func() { _ = outFile.Close() }()
 
-	gzWriter := gzip.NewWriter(outFile)
+	var gzWriter *gzip.Writer
+	if h.compressionLevel != 0 {
+		w, err := gzip.NewWriterLevel(outFile, h.compressionLevel)
+		if err != nil {
+			return err
+		}
+		gzWriter = w
+	} else {
+		gzWriter = gzip.NewWriter(outFile)
+	}
 	defer func() { _ = gzWriter.Close() }()
 
 	tarWriter := tar.NewWriter(gzWriter)
 	defer func() { _ = tarWriter.Close() }()
 
+	// For future: parallelize per-source walking with a file queue feeding a single tar writer.
 	for _, src := range sources {
 		if err := h.addSourceToTar(ctx, tarWriter, src); err != nil {
 			return err
@@ -71,7 +89,9 @@ import (
 	return nil
 }
 
- func (h *TarArchiveHandler) addSourceToTar(ctx context.Context, tw *tar.Writer, src ArchiveSource) error {
+// NOTE: Potential improvements for xattrs/ACL/hardlinks can be added here by reading and adding pax headers.
+
+func (h *TarArchiveHandler) addSourceToTar(ctx context.Context, tw *tar.Writer, src ArchiveSource) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -125,7 +145,7 @@ import (
 	return writeFileOrSymlinkToTar(tw, src.Path, info, filepath.ToSlash(nameInTar))
 }
 
- func writeFileOrSymlinkToTar(tw *tar.Writer, srcPath string, fi os.FileInfo, nameInTar string) error {
+func writeFileOrSymlinkToTar(tw *tar.Writer, srcPath string, fi os.FileInfo, nameInTar string) error {
 	if fi.Mode()&os.ModeSymlink != 0 {
 		// Symlink: store as a symlink entry
 		target, err := os.Readlink(srcPath)
@@ -157,7 +177,7 @@ import (
 	return err
 }
 
- func (h *TarArchiveHandler) ExtractArchive(ctx context.Context, archivePath, destDir string) error {
+func (h *TarArchiveHandler) ExtractArchive(ctx context.Context, archivePath, destDir string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return err
 	}
@@ -226,7 +246,7 @@ import (
 	return nil
 }
 
- func (h *TarArchiveHandler) ListArchive(ctx context.Context, archivePath string) ([]ArchiveEntry, error) {
+func (h *TarArchiveHandler) ListArchive(ctx context.Context, archivePath string) ([]ArchiveEntry, error) {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return nil, err
@@ -264,12 +284,12 @@ import (
 	return entries, nil
 }
 
- func ensureParentDir(path string) error {
+func ensureParentDir(path string) error {
 	dir := filepath.Dir(path)
 	return os.MkdirAll(dir, 0o755)
 }
 
- func secureJoin(baseDir, name string) (string, error) {
+func secureJoin(baseDir, name string) (string, error) {
 	// Convert to forward slashes in tar
 	cleanName := filepath.Clean(strings.TrimPrefix(name, "/"))
 	if cleanName == "." || cleanName == "" {
@@ -287,7 +307,7 @@ import (
 	return joined, nil
 }
 
- func tarTypeToString(b byte) string {
+func tarTypeToString(b byte) string {
 	switch b {
 	case tar.TypeDir:
 		return "dir"

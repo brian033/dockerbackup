@@ -45,6 +45,7 @@ type DockerClient interface {
 	StartContainer(ctx context.Context, containerID string) error
 	HostIPs(ctx context.Context) ([]string, error)
 	ContainerState(ctx context.Context, containerID string) (status string, healthStatus string, err error)
+	ListProjectContainers(ctx context.Context, project string) ([]ProjectContainerRef, error)
 }
 
 type CLIClient struct{}
@@ -310,7 +311,9 @@ func (c *CLIClient) ImageLoad(ctx context.Context, tarPath string) error {
 
 func (c *CLIClient) HostIPs(ctx context.Context) ([]string, error) {
 	addrs, err := net.InterfaceAddrs()
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	ips := []string{}
 	for _, a := range addrs {
 		var ip net.IP
@@ -320,9 +323,13 @@ func (c *CLIClient) HostIPs(ctx context.Context) ([]string, error) {
 		case *net.IPAddr:
 			ip = v.IP
 		}
-		if ip == nil || ip.IsLoopback() { continue }
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
 		ip = ip.To4()
-		if ip == nil { continue }
+		if ip == nil {
+			continue
+		}
 		ips = append(ips, ip.String())
 	}
 	return ips, nil
@@ -337,7 +344,41 @@ func (c *CLIClient) ContainerState(ctx context.Context, containerID string) (str
 		return "", "", fmt.Errorf("docker inspect state %s failed: %v: %s", containerID, err, stderr.String())
 	}
 	parts := strings.Fields(strings.TrimSpace(stdout.String()))
-	if len(parts) == 0 { return "", "", nil }
-	if len(parts) == 1 { return parts[0], "", nil }
+	if len(parts) == 0 {
+		return "", "", nil
+	}
+	if len(parts) == 1 {
+		return parts[0], "", nil
+	}
 	return parts[0], parts[1], nil
+}
+
+func (c *CLIClient) ListProjectContainers(ctx context.Context, project string) ([]ProjectContainerRef, error) {
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label=com.docker.compose.project="+project, "--format", "{{.ID}}\t{{.Names}}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("docker ps compose filter failed: %v: %s", err, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	refs := []ProjectContainerRef{}
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		id := parts[0]
+		name := parts[1]
+		svc := name
+		us := strings.Split(name, "_")
+		if len(us) >= 3 && us[0] == project {
+			svc = us[1]
+		}
+		refs = append(refs, ProjectContainerRef{Service: svc, ID: id, ContainerName: name})
+	}
+	return refs, nil
 }

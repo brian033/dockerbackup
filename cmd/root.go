@@ -99,6 +99,9 @@ func (c *compositeClient) HostIPs(ctx context.Context) ([]string, error) { retur
 func (c *compositeClient) ContainerState(ctx context.Context, containerID string) (string, string, error) {
 	return c.cli.ContainerState(ctx, containerID)
 }
+func (c *compositeClient) ListProjectContainers(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
+	return c.cli.ListProjectContainers(ctx, project)
+}
 
 func Execute() {
 	log := logger.New()

@@ -49,6 +49,14 @@ func (c *RestoreCmd) Execute(ctx context.Context, args []string) error {
 	var fallbackBridge bool
 	var waitHealthy bool
 	var waitTimeout int
+	var replace bool
+	var bindRestoreRoot string
+	var forceBindIP string
+	var bindInterface string
+	var dropDevices bool
+	var dropCaps bool
+	var dropSeccomp bool
+	var dropAppArmor bool
 	fs.StringVarP(&name, "name", "n", "", "New container name")
 	fs.BoolVar(&start, "start", false, "Start container after restore")
 	fs.StringArrayVar(&netMaps, "network-map", nil, "Map networks old:new (repeatable)")
@@ -58,6 +66,14 @@ func (c *RestoreCmd) Execute(ctx context.Context, args []string) error {
 	fs.BoolVar(&fallbackBridge, "fallback-bridge", false, "If macvlan/ipvlan parent missing, use bridge network")
 	fs.BoolVar(&waitHealthy, "wait-healthy", false, "Wait until container healthcheck reports healthy before returning")
 	fs.IntVar(&waitTimeout, "wait-timeout", int((2 * time.Minute).Seconds()), "Max seconds to wait when --wait-healthy is set")
+	fs.BoolVar(&replace, "replace", false, "Stop and remove existing container with the same name before restore")
+	fs.StringVar(&bindRestoreRoot, "bind-restore-root", "", "If bind source missing, relocate under this root (e.g., /srv/restored)")
+	fs.StringVar(&forceBindIP, "force-bind-ip", "", "Force all port bindings to use this host IP")
+	fs.StringVar(&bindInterface, "bind-interface", "", "Prefer this interface's primary IP for port bindings if HostIp missing")
+	fs.BoolVar(&dropDevices, "drop-devices", false, "Drop HostConfig.Devices on restore (safe mode)")
+	fs.BoolVar(&dropCaps, "drop-caps", false, "Drop HostConfig.CapAdd/CapDrop on restore (safe mode)")
+	fs.BoolVar(&dropSeccomp, "drop-seccomp", false, "Drop HostConfig.SecurityOpt seccomp profile (safe mode)")
+	fs.BoolVar(&dropAppArmor, "drop-apparmor", false, "Drop HostConfig.SecurityOpt apparmor profile (safe mode)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -81,15 +97,23 @@ func (c *RestoreCmd) Execute(ctx context.Context, args []string) error {
 	req := backup.RestoreRequest{
 		BackupPath: backupFile,
 		Options: backup.RestoreOptions{
-			ContainerName:  name,
-			Start:          start,
-			NetworkMap:     parseMap(netMaps),
-			ParentMap:      parseMap(parentMaps),
-			DropHostIPs:    dropHostIPs,
-			ReassignIPs:    reassignIPs,
-			FallbackBridge: fallbackBridge,
-			WaitHealthy:    waitHealthy,
+			ContainerName:      name,
+			Start:              start,
+			NetworkMap:         parseMap(netMaps),
+			ParentMap:          parseMap(parentMaps),
+			DropHostIPs:        dropHostIPs,
+			ReassignIPs:        reassignIPs,
+			FallbackBridge:     fallbackBridge,
+			WaitHealthy:        waitHealthy,
 			WaitTimeoutSeconds: waitTimeout,
+			ReplaceExisting:    replace,
+			BindRestoreRoot:    bindRestoreRoot,
+			ForceBindIP:        forceBindIP,
+			BindInterface:      bindInterface,
+			DropDevices:        dropDevices,
+			DropCaps:           dropCaps,
+			DropSeccomp:        dropSeccomp,
+			DropAppArmor:       dropAppArmor,
 		},
 		TargetType: backup.TargetContainer,
 	}

@@ -75,7 +75,12 @@ func (f *fakeDockerClient) ImageLoad(ctx context.Context, tarPath string) error 
 func (f *fakeDockerClient) ContainerState(ctx context.Context, containerID string) (string, string, error) {
 	return "running", "healthy", nil
 }
-func (f *fakeDockerClient) HostIPs(ctx context.Context) ([]string, error) { return []string{"127.0.0.1", "0.0.0.0"}, nil }
+func (f *fakeDockerClient) HostIPs(ctx context.Context) ([]string, error) {
+	return []string{"127.0.0.1", "0.0.0.0"}, nil
+}
+func (f *fakeDockerClient) ListProjectContainers(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
+	return nil, nil
+}
 
 type fakeDockerClientRestore struct {
 	createdImageRef   string
@@ -137,7 +142,12 @@ func (f *fakeDockerClientRestore) ImageLoad(ctx context.Context, tarPath string)
 func (f *fakeDockerClientRestore) ContainerState(ctx context.Context, containerID string) (string, string, error) {
 	return "running", "healthy", nil
 }
-func (f *fakeDockerClientRestore) HostIPs(ctx context.Context) ([]string, error) { return []string{"127.0.0.1", "0.0.0.0"}, nil }
+func (f *fakeDockerClientRestore) HostIPs(ctx context.Context) ([]string, error) {
+	return []string{"127.0.0.1", "0.0.0.0"}, nil
+}
+func (f *fakeDockerClientRestore) ListProjectContainers(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
+	return nil, nil
+}
 
 type fakeDockerClientWithInspect struct {
 	fakeDockerClient

@@ -42,31 +42,22 @@ func (c *DryRunRestoreCmd) Execute(ctx context.Context, args []string) error {
 	fmt.Println("- Ensure networks and volumes exist; restore data for volumes and bind mounts")
 	fmt.Println("- Recreate container with mounts, ports, env, and networking")
 
-	// Quick peek into configs presence
 	has := map[string]bool{}
 	for _, e := range entries { has[e.Path] = true }
-	if has["volumes/volume_configs.json"] {
-		fmt.Println("  * volume configs found: volumes/volume_configs.json")
-	}
-	if has["networks/network_configs.json"] {
-		fmt.Println("  * network configs found: networks/network_configs.json")
-	}
-	if has["image.tar"] {
-		fmt.Println("  * image tar found: image.tar")
-	}
+	if has["volumes/volume_configs.json"] { fmt.Println("  * volume configs found: volumes/volume_configs.json") }
+	if has["networks/network_configs.json"] { fmt.Println("  * network configs found: networks/network_configs.json") }
+	if has["image.tar"] { fmt.Println("  * image tar found: image.tar") }
+	if has["container.json"] { fmt.Println("  * container inspect found: container.json") }
+	for _, e := range entries { if len(e.Path) > 8 && e.Path[:8] == "volumes/" && filepath.Ext(e.Path) == ".gz" { fmt.Printf("  * volume archive: %s\n", e.Path) } }
+
+	// Show brief diff-like info by extracting minimal JSON fields if present in list
+	// Note: full diff requires extraction; here we hint based on presence
 	if has["container.json"] {
-		fmt.Println("  * container inspect found: container.json")
-	}
-	// List volume tarballs
-	for _, e := range entries {
-		if len(e.Path) > 8 && e.Path[:8] == "volumes/" && filepath.Ext(e.Path) == ".gz" {
-			fmt.Printf("  * volume archive: %s\n", e.Path)
-		}
-	}
-	// Optionally print minimal container name from container.json
-	if has["container.json"] {
-		// Not extracting; just show hint
-		fmt.Println("(use 'dockerbackup list' to see raw entries; or restore to confirm details)")
+		fmt.Println("Diff hints:")
+		fmt.Println("  - ports: will recreate HostConfig.PortBindings and Config.ExposedPorts")
+		fmt.Println("  - networks: will attach per NetworkSettings.Networks; name mapping may apply")
+		fmt.Println("  - volumes: named volumes restored; bind mounts validated, may relocate if bind-restore-root set")
+		fmt.Println("  - env: will set from Config.Env; labels from Config.Labels")
 	}
 	return nil
 }

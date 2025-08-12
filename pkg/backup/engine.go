@@ -7,14 +7,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/brian033/dockerbackup/internal/errors"
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/archive"
+	"github.com/brian033/dockerbackup/pkg/compose"
 	"github.com/brian033/dockerbackup/pkg/docker"
 	"github.com/brian033/dockerbackup/pkg/filesystem"
 	"github.com/docker/docker/api/types"
@@ -33,6 +37,7 @@ type BackupRequest struct {
 	TargetType         BackupTargetType
 	ContainerID        string
 	ComposeProjectPath string
+	ProjectName        string
 	Options            BackupOptions
 }
 
@@ -88,8 +93,149 @@ type backupMetadata struct {
 }
 
 func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest) (*BackupResult, error) {
+	if request.TargetType == TargetCompose {
+		projectPath := request.ComposeProjectPath
+		if projectPath == "" {
+			projectPath = "."
+		}
+		// Determine project name
+		projectName := request.ProjectName
+		if projectName == "" {
+			// Try to read compose name or use directory basename
+			projectName = filepath.Base(projectPath)
+		}
+		// Prepare working dir
+		workDir, err := os.MkdirTemp("", fmt.Sprintf("dockerbackup_compose_%s_*", safeName(projectName)))
+		if err != nil {
+			return nil, &errors.OperationError{Op: "create temp dir", Err: err}
+		}
+		defer func() { _ = os.RemoveAll(workDir) }()
+
+		composeDir := filepath.Join(workDir, "compose-files")
+		containersDir := filepath.Join(workDir, "containers")
+		networksDir := filepath.Join(workDir, "networks")
+		volumesDir := filepath.Join(workDir, "volumes")
+		_ = os.MkdirAll(composeDir, 0o755)
+		_ = os.MkdirAll(containersDir, 0o755)
+		_ = os.MkdirAll(networksDir, 0o755)
+		_ = os.MkdirAll(volumesDir, 0o755)
+
+		// Copy compose files
+		for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "docker-compose.override.yml", ".env"} {
+			src := filepath.Join(projectPath, name)
+			if b, err := os.ReadFile(src); err == nil {
+				_ = os.WriteFile(filepath.Join(composeDir, name), b, 0o644)
+			}
+		}
+
+		// Discover project containers
+		refs, err := e.dockerClient.ListProjectContainers(ctx, projectName)
+		if err != nil {
+			return nil, &errors.OperationError{Op: "list project containers", Err: err}
+		}
+		// Backup each service container into containers/<service>/service.tar.gz
+		serviceNames := make([]string, 0, len(refs))
+		for _, r := range refs {
+			serviceNames = append(serviceNames, r.Service)
+			svcDir := filepath.Join(containersDir, r.Service)
+			_ = os.MkdirAll(svcDir, 0o755)
+			outTar := filepath.Join(svcDir, "container.tar.gz")
+			builder := NewBackupOptionsBuilder().WithOutput(outTar).WithCompression(0)
+			_, err := e.Backup(ctx, BackupRequest{TargetType: TargetContainer, ContainerID: r.ID, Options: builder.Build()})
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Aggregate networks used by the containers
+		seenNets := map[string]struct{}{}
+		var netCfgs []docker.NetworkConfig
+		for _, r := range refs {
+			b, err := e.dockerClient.InspectContainer(ctx, r.ID)
+			if err != nil {
+				continue
+			}
+			var cj types.ContainerJSON
+			if err := json.Unmarshal(b, &cj); err != nil {
+				continue
+			}
+			if cj.NetworkSettings == nil {
+				continue
+			}
+			for name := range cj.NetworkSettings.Networks {
+				if _, ok := seenNets[name]; ok {
+					continue
+				}
+				seenNets[name] = struct{}{}
+				if n, err := e.dockerClient.InspectNetwork(ctx, name); err == nil {
+					netCfgs = append(netCfgs, *n)
+				}
+			}
+		}
+		if len(netCfgs) > 0 {
+			if b, err := json.MarshalIndent(netCfgs, "", "  "); err == nil {
+				_ = os.WriteFile(filepath.Join(networksDir, "network_configs.json"), b, 0o644)
+			}
+		}
+
+		// Collect volume configs used across services (by mounts)
+		volSet := map[string]struct{}{}
+		var volCfgs []docker.VolumeConfig
+		for _, r := range refs {
+			b, err := e.dockerClient.InspectContainer(ctx, r.ID)
+			if err != nil {
+				continue
+			}
+			var ci docker.ContainerInfo
+			if info, err := docker.ParseContainerInfo(b); err == nil {
+				ci = info
+			} else {
+				continue
+			}
+			for _, m := range ci.Mounts {
+				if m.Type == "volume" && m.Name != "" {
+					if _, ok := volSet[m.Name]; ok {
+						continue
+					}
+					volSet[m.Name] = struct{}{}
+					if v, err := e.dockerClient.InspectVolume(ctx, m.Name); err == nil && v != nil {
+						volCfgs = append(volCfgs, *v)
+					}
+				}
+			}
+		}
+		if len(volCfgs) > 0 {
+			if b, err := json.MarshalIndent(volCfgs, "", "  "); err == nil {
+				_ = os.WriteFile(filepath.Join(volumesDir, "volume_configs.json"), b, 0o644)
+			}
+		}
+
+		// Metadata
+		meta := map[string]any{"version": 1, "projectName": projectName, "services": serviceNames}
+		if b, err := json.MarshalIndent(meta, "", "  "); err == nil {
+			_ = os.WriteFile(filepath.Join(workDir, "metadata.json"), b, 0o644)
+		}
+
+		// Final archive
+		outputPath := request.Options.OutputPath
+		if outputPath == "" {
+			outputPath = filepath.Join(projectPath, fmt.Sprintf("%s_compose_backup.tar.gz", safeName(projectName)))
+		}
+		sources := []archive.ArchiveSource{
+			{Path: composeDir, DestPath: "compose-files"},
+			{Path: containersDir, DestPath: "containers"},
+			{Path: networksDir, DestPath: "networks"},
+			{Path: volumesDir, DestPath: "volumes"},
+			{Path: filepath.Join(workDir, "metadata.json"), DestPath: "metadata.json"},
+		}
+		if err := e.archiveHandler.CreateArchive(ctx, sources, outputPath); err != nil {
+			return nil, &errors.OperationError{Op: "create compose archive", Err: err}
+		}
+		return &BackupResult{OutputPath: outputPath}, nil
+	}
+
 	if request.TargetType != TargetContainer {
-		return nil, &errors.ValidationError{Msg: "only container backup supported in v0"}
+		return nil, &errors.ValidationError{Msg: "unsupported target type"}
 	}
 	if request.ContainerID == "" {
 		return nil, &errors.ValidationError{Field: "ContainerID", Msg: "required"}
@@ -246,6 +392,101 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 }
 
 func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreRequest) (*RestoreResult, error) {
+	if request.TargetType == TargetCompose {
+		// Extract
+		tmpDir, err := os.MkdirTemp("", "dockerbackup_compose_restore_*")
+		if err != nil {
+			return nil, &errors.OperationError{Op: "create temp dir", Err: err}
+		}
+		defer func() { _ = os.RemoveAll(tmpDir) }()
+		if err := e.archiveHandler.ExtractArchive(ctx, request.BackupPath, tmpDir); err != nil {
+			return nil, &errors.OperationError{Op: "extract backup", Err: err}
+		}
+
+		// Ensure networks from configs
+		if b, err := os.ReadFile(filepath.Join(tmpDir, "networks", "network_configs.json")); err == nil {
+			var netCfgs []docker.NetworkConfig
+			_ = json.Unmarshal(b, &netCfgs)
+			for _, nc := range netCfgs {
+				_ = e.dockerClient.EnsureNetwork(ctx, nc)
+			}
+		}
+		// Ensure volumes from configs
+		if b, err := os.ReadFile(filepath.Join(tmpDir, "volumes", "volume_configs.json")); err == nil {
+			var volCfgs []docker.VolumeConfig
+			_ = json.Unmarshal(b, &volCfgs)
+			for _, vc := range volCfgs {
+				_ = e.dockerClient.EnsureVolume(ctx, vc)
+			}
+		}
+
+		// Compute service order from compose-files if present
+		services := map[string]struct{}{}
+		order := []string{}
+		composePathYml := filepath.Join(tmpDir, "compose-files", "docker-compose.yml")
+		composePathYaml := filepath.Join(tmpDir, "compose-files", "docker-compose.yaml")
+		var data []byte
+		if b, err := os.ReadFile(composePathYml); err == nil {
+			data = b
+		} else if b, err := os.ReadFile(composePathYaml); err == nil {
+			data = b
+		}
+		if len(data) > 0 {
+			ord, names := compose.OrderFromComposeYAML(data)
+			if len(ord) > 0 {
+				order = ord
+			}
+			for _, n := range names {
+				services[n] = struct{}{}
+			}
+		}
+		// Fallback: discover services by directory structure
+		if len(services) == 0 {
+			entries, _ := os.ReadDir(filepath.Join(tmpDir, "containers"))
+			for _, e2 := range entries {
+				if e2.IsDir() {
+					services[e2.Name()] = struct{}{}
+				}
+			}
+		}
+		if len(order) == 0 {
+			for s := range services {
+				order = append(order, s)
+			}
+			sort.Strings(order)
+		}
+
+		// Restore each service container tar without starting; then start all if requested
+		restored := []string{}
+		for _, svc := range order {
+			svcDir := filepath.Join(tmpDir, "containers", svc)
+			// find a .tar.gz file inside
+			entries, _ := os.ReadDir(svcDir)
+			var tarPath string
+			for _, e2 := range entries {
+				if strings.HasSuffix(e2.Name(), ".tar.gz") {
+					tarPath = filepath.Join(svcDir, e2.Name())
+					break
+				}
+			}
+			if tarPath == "" {
+				continue
+			}
+			_, err := e.Restore(ctx, RestoreRequest{BackupPath: tarPath, Options: RestoreOptions{Start: false, ReplaceExisting: request.Options.ReplaceExisting, DropHostIPs: request.Options.DropHostIPs, ReassignIPs: request.Options.ReassignIPs, FallbackBridge: request.Options.FallbackBridge, BindRestoreRoot: request.Options.BindRestoreRoot, ForceBindIP: request.Options.ForceBindIP, BindInterface: request.Options.BindInterface, DropDevices: request.Options.DropDevices, DropCaps: request.Options.DropCaps, DropSeccomp: request.Options.DropSeccomp, DropAppArmor: request.Options.DropAppArmor}})
+			if err == nil {
+				restored = append(restored, svc)
+			}
+		}
+		if request.Options.Start {
+			// Start in order and optionally wait healthy
+			for _, svc := range order {
+				// best-effort: assume container name == svc or was restored with original name
+				_ = execCommand(ctx, "docker", "start", svc)
+			}
+		}
+		return &RestoreResult{RestoredID: strings.Join(restored, ",")}, nil
+	}
+
 	// Extract backup to temp dir
 	tmpDir, err := os.MkdirTemp("", "dockerbackup_restore_*")
 	if err != nil {
@@ -400,7 +641,9 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 	if hostCfg.PortBindings != nil {
 		hostIPs, _ := e.dockerClient.HostIPs(ctx)
 		present := map[string]struct{}{}
-		for _, ip := range hostIPs { present[ip] = struct{}{} }
+		for _, ip := range hostIPs {
+			present[ip] = struct{}{}
+		}
 		for port, bindings := range hostCfg.PortBindings {
 			filtered := bindings[:0]
 			for _, b := range bindings {
@@ -433,7 +676,7 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		}
 	}
 
-	// Determine new name
+	// Replacement: if a container with target name exists, remove it when ReplaceExisting
 	newName := cj.Name
 	if strings.HasPrefix(newName, "/") {
 		newName = strings.TrimPrefix(newName, "/")
@@ -441,6 +684,79 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 	if request.Options.ContainerName != "" {
 		newName = request.Options.ContainerName
 	}
+	if request.Options.ReplaceExisting && newName != "" {
+		// best-effort remove existing
+		_ = execCommand(ctx, "docker", "rm", "-f", newName)
+	}
+
+	// Adjust HostConfig for safe-mode drops
+	hostCfg = cj.HostConfig
+	if hostCfg == nil {
+		hostCfg = &container.HostConfig{}
+	}
+	if request.Options.DropDevices {
+		hostCfg.Devices = nil
+	}
+	if request.Options.DropCaps {
+		hostCfg.CapAdd = nil
+		hostCfg.CapDrop = nil
+	}
+	if request.Options.DropSeccomp || request.Options.DropAppArmor {
+		filtered := make([]string, 0, len(hostCfg.SecurityOpt))
+		for _, opt := range hostCfg.SecurityOpt {
+			if request.Options.DropSeccomp && strings.Contains(opt, "seccomp=") {
+				continue
+			}
+			if request.Options.DropAppArmor && strings.Contains(opt, "apparmor=") {
+				continue
+			}
+			filtered = append(filtered, opt)
+		}
+		hostCfg.SecurityOpt = filtered
+	}
+
+	// Bind restore root: relocate missing bind sources
+	if request.Options.BindRestoreRoot != "" {
+		for i := range hostCfg.Mounts {
+			m := &hostCfg.Mounts[i]
+			if m.Type == "bind" && m.Source != "" {
+				if _, err := os.Stat(m.Source); os.IsNotExist(err) {
+					base := filepath.Base(m.Source)
+					newSrc := filepath.Join(request.Options.BindRestoreRoot, base)
+					_ = os.MkdirAll(newSrc, 0o755)
+					m.Source = newSrc
+				}
+			}
+		}
+	}
+
+	cfg = cj.Config
+	if cfg == nil {
+		cfg = &container.Config{}
+	}
+	cfg.Image = imageRef
+
+	// Ports: apply force-bind-ip or bind-interface preference
+	if hostCfg.PortBindings != nil {
+		// If bind-interface set, try to pick its IP
+		preferredIP := request.Options.ForceBindIP
+		if preferredIP == "" && request.Options.BindInterface != "" {
+			if ip, err := primaryIPv4OfInterface(request.Options.BindInterface); err == nil {
+				preferredIP = ip
+			}
+		}
+		if preferredIP != "" {
+			for port, bindings := range hostCfg.PortBindings {
+				for i := range bindings {
+					bindings[i].HostIP = preferredIP
+				}
+				hostCfg.PortBindings[port] = bindings
+			}
+		}
+	}
+
+	// Determine new name (already computed above)
+	// newName is ready
 
 	// Prefer SDK-based creation if available
 	containerID, err := e.dockerClient.CreateContainerFromSpec(ctx, cfg, hostCfg, netCfg, newName)
@@ -463,21 +779,27 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 			return nil, &errors.OperationError{Op: "docker start", Err: err}
 		}
 		if request.Options.WaitHealthy {
-			timeout := time.Duration(request.Options.WaitTimeoutSeconds) * time.Second
-			if timeout <= 0 { timeout = 2 * time.Minute }
-			deadline := time.Now().Add(timeout)
-			for {
-				if time.Now().After(deadline) {
-					return &RestoreResult{RestoredID: containerID}, nil
+			// If no healthcheck defined in the original inspect, skip waiting
+			noHealthcheck := cj.ContainerJSONBase == nil || cj.ContainerJSONBase.State == nil || cj.ContainerJSONBase.State.Health == nil
+			if !noHealthcheck {
+				timeout := time.Duration(request.Options.WaitTimeoutSeconds) * time.Second
+				if timeout <= 0 {
+					timeout = 2 * time.Minute
 				}
-				status, health, _ := e.dockerClient.ContainerState(ctx, containerID)
-				if status == "exited" || status == "dead" || status == "removing" {
-					return &RestoreResult{RestoredID: containerID}, nil
+				deadline := time.Now().Add(timeout)
+				for {
+					if time.Now().After(deadline) {
+						return &RestoreResult{RestoredID: containerID}, nil
+					}
+					status, health, _ := e.dockerClient.ContainerState(ctx, containerID)
+					if status == "exited" || status == "dead" || status == "removing" {
+						return &RestoreResult{RestoredID: containerID}, nil
+					}
+					if health == "healthy" {
+						break
+					}
+					time.Sleep(2 * time.Second)
 				}
-				if health == "healthy" {
-					break
-				}
-				time.Sleep(2 * time.Second)
 			}
 		}
 	}
@@ -617,4 +939,29 @@ func extractTarGzToHost(ctx context.Context, tarGzPath string, destDir string, e
 		}
 	}
 	return nil
+}
+
+func execCommand(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	return cmd.Run()
+}
+
+func primaryIPv4OfInterface(ifName string) (string, error) {
+	itf, err := net.InterfaceByName(ifName)
+	if err != nil {
+		return "", err
+	}
+	addrs, err := itf.Addrs()
+	if err != nil {
+		return "", err
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok {
+			ip := ipn.IP.To4()
+			if ip != nil && !ip.IsLoopback() {
+				return ip.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no IPv4 on interface %s", ifName)
 }

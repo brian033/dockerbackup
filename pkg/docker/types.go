@@ -10,7 +10,7 @@ type ContainerInfo struct {
 	ID     string          `json:"Id"`
 	Name   string          `json:"Name"`
 	Mounts []Mount         `json:"Mounts"`
-	Config json.RawMessage `json:"Config"` // raw for future use
+	Config json.RawMessage `json:"Config"`
 }
 
 type Mount struct {
@@ -22,7 +22,6 @@ type Mount struct {
 }
 
 func ParseContainerInfo(inspectJSON []byte) (ContainerInfo, error) {
-	// docker inspect returns an array
 	var arr []ContainerInfo
 	if err := json.Unmarshal(inspectJSON, &arr); err != nil {
 		return ContainerInfo{}, ErrEmptyInspect
@@ -31,7 +30,6 @@ func ParseContainerInfo(inspectJSON []byte) (ContainerInfo, error) {
 		return ContainerInfo{}, ErrEmptyInspect
 	}
 	info := arr[0]
-	// docker prefixes Name with '/' usually; normalize
 	if len(info.Name) > 0 && info.Name[0] == '/' {
 		info.Name = info.Name[1:]
 	}
@@ -67,4 +65,11 @@ type IPAMConfig struct {
 	Subnet  string `json:"Subnet"`
 	Gateway string `json:"Gateway"`
 	IPRange string `json:"IPRange"`
+}
+
+// ProjectContainerRef references a compose service container
+type ProjectContainerRef struct {
+	Service       string
+	ID            string
+	ContainerName string
 }

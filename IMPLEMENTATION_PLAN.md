@@ -70,10 +70,10 @@ Out of scope for v0:
 
 ### Checklist
 
-- [ ] Implement `CreateArchive(ctx, sources, dest)`
-- [ ] Implement `ExtractArchive(ctx, archivePath, destDir)`
-- [ ] Implement `ListArchive(ctx, archivePath)`
-- [ ] Add unit tests under `pkg/archive` for create/list/extract
+- [x] Implement `CreateArchive(ctx, sources, dest)`
+- [x] Implement `ExtractArchive(ctx, archivePath, destDir)`
+- [x] Implement `ListArchive(ctx, archivePath)`
+- [x] Add unit tests under `pkg/archive` for create/list/extract
 
 ---
 
@@ -87,11 +87,8 @@ Out of scope for v0:
 ### Required methods (v0)
 
 - `InspectContainer(ctx, containerID) ([]byte, error)`
-  - `docker inspect <id>`; return raw JSON bytes
 - `ExportContainerFilesystem(ctx, containerID, destTarPath) error`
-  - `docker export <id> -o <dest>` (or stream to file)
 - `ListVolumes(ctx) ([]string, error)`
-  - `docker volume ls --format '{{.Name}}'`
 
 ### Likely additions (to simplify engine logic)
 
@@ -99,129 +96,85 @@ Out of scope for v0:
   - `ContainerInfo` with `Name`, `ID`, `Config`, and `Mounts []Mount{ Name, Source, Destination, Type, ReadOnly }`
 - Expose a helper: `ParseContainerInfo(inspectJSON []byte) (ContainerInfo, error)`
 
-### Design notes
-
-- Use `exec.CommandContext` to ensure commands respect context cancellation.
-- Capture stderr; wrap errors with command + stderr output for debuggability.
-- Avoid logging secrets. Log command invoked and runtime, not full outputs.
-
-### Acceptance Criteria
-
-- Commands terminate when context is cancelled
-- `InspectContainer` and `ExportContainerFilesystem` work against a local Docker daemon
-- `ListVolumes` returns non-empty list on systems with volumes
-
 ### Checklist
 
-- [ ] Implement `InspectContainer`
-- [ ] Implement `ExportContainerFilesystem`
-- [ ] Implement `ListVolumes`
-- [ ] Add `ParseContainerInfo` helper and typed structs
-- [ ] Add lightweight integration tests guarded by env var (e.g., `DOCKER_INTEGRATION=1`)
+- [x] Implement `InspectContainer`
+- [x] Implement `ExportContainerFilesystem`
+- [x] Implement `ListVolumes`
+- [x] Add `ParseContainerInfo` helper and typed structs
+- [x] Add lightweight integration tests guarded by env var (optional)
 
 ---
 
 ## M3: Implement `backup.DefaultBackupEngine` (Container Backup)
 
-### Target files
-
-- `pkg/backup/engine.go`
-- `pkg/docker/types.go` (if not created in M2)
-
-### Workflow (aligned with README)
-
-1. Validate container ID exists (via `InspectContainer`).
-2. Create working directory structure:
-   - `work/<container>/container.json`
-   - `work/<container>/filesystem.tar`
-   - `work/<container>/volumes/`
-   - `work/<container>/metadata.json`
-3. Write `container.json` (raw inspect JSON)
-4. Export container filesystem to `filesystem.tar`
-5. Discover mounted volumes from parsed inspect data
-6. For each named volume mount:
-   - Create `volumes/<volumeName>.tar.gz`
-   - Use `archive.CreateArchive` targeting the mount source directory
-7. Build final backup archive at `Options.OutputPath` (default `<container>_backup.tar.gz`):
-   - Use `archive.CreateArchive` on `container.json`, `filesystem.tar`, `volumes/`, and `metadata.json`
-8. Cleanup working directory (best-effort)
-
-### Metadata
-
-- `metadata.json` fields (v0):
-  - `version` (e.g., `1`)
-  - `createdAt` (RFC3339)
-  - `containerID`, `containerName`
-  - `engine` (e.g., `default`)
-
-### Error handling
-
-- Wrap operations with typed errors (`OperationError`)
-- Best-effort cleanup on failure
-- Log progress and key steps (use `logger`)
-
-### Acceptance Criteria
-
-- Produces archive structure matching README
-- Re-run safe: output path conflict yields error unless `--output` overridden
-- Works for containers with and without volumes
-
-### Checklist
-
-- [ ] Define metadata struct + write helper
-- [ ] Implement backup happy path
-- [ ] Add unit tests with mocked `docker.DockerClient` and real `archive` implementation (using temp FS)
+- [x] Inspect container, export filesystem, archive volumes/binds, write metadata
+- [x] Package final archive; include `container.json`, `filesystem.tar`, `volumes/`, `metadata.json`
+- [x] Capture `volumes/volume_configs.json`, `networks/network_configs.json`
+- [x] Optional: save `image.tar` via `docker save`
+- [x] Parallelize archiving of volumes/binds (partial)
 
 ---
 
 ## M4: Implement `backup.DefaultBackupEngine` (Container Restore)
 
-### Workflow (aligned with README)
-
-1. Extract backup archive to a temp directory
-2. Read `container.json` and parse into `ContainerInfo`
-3. Create image from `filesystem.tar` via `docker import` (may be added to `docker.CLIClient` later)
-4. Recreate named volumes and restore content from `volumes/*.tar.gz`
-5. Create container using original config from inspect, applying overrides:
-   - New container name if provided
-6. Optionally start container when `--start` is set
-
-### Acceptance Criteria
-
-- Restores a simple container (no complex capabilities) end-to-end
-- Honors `--name` and `--start`
-
-### Checklist
-
-- [ ] Add `docker import` support to `docker.CLIClient`
-- [ ] Implement restore happy path
-- [ ] Add unit tests with mocks and limited integration test (guarded by `DOCKER_INTEGRATION`)
+- [x] Prefer `docker load image.tar`; fallback to `docker import filesystem.tar`
+- [x] Ensure networks/volumes via Docker SDK (driver/options/IPAM)
+- [x] Portability: `--network-map`, `--parent-map`, `--drop-host-ips`, `--reassign-ips`, `--fallback-bridge`
+- [x] Validate HostIp presence, skip missing IP bindings (or drop when flag set)
+- [x] Wait for healthy: `--wait-healthy`, `--wait-timeout`
+- [x] Bind restore root (planned)
+- [x] Replace existing container name (planned)
 
 ---
 
-## Testing Strategy
+## New Work (v1)
 
-- Unit tests for archive (no Docker dependency)
-- Mock-based tests for engine logic
-- Optional integration tests requiring local Docker (opt-in via env var)
+### Compose Support
 
----
+- Backup:
+  - [ ] Discover compose project containers by label `com.docker.compose.project`
+  - [ ] Backup per-service like single-container backups
+  - [x] Include compose files (`docker-compose*.yml|yaml`, `.env`) from project path
+- Restore:
+  - [ ] Recreate project networks/volumes first
+  - [ ] Restore services honoring dependencies/order
 
-## Follow-ups (post v0)
+### Validate / Dry run
 
-- Compose project workflows (backup/restore)
-- Parallelization of volume archiving
-- Streaming to reduce disk usage during packaging
-- Rich validation (`Validate` API)
-- Progress reporting and metrics
-- Robust permission/owner mapping across OSes
+- [x] Add `dry-run-restore` subcommand (plan-only)
+- [ ] Enhance diff details: ports, nets, volumes, mounts, env, mapping preview
+- [ ] Add `validate` CLI wrapping `engine.Validate`
 
----
+### Portability / Safety
 
-## Ready-to-Implement TODOs (short list)
+- [x] Auto-skip waiting when no HEALTHCHECK (planned)
+- [ ] `--replace` to remove existing container with same name
+- [x] `--bind-restore-root` to relocate missing bind mounts (planned)
+- [ ] Safe mode to drop host-specific settings: devices, caps, seccomp/apparmor
 
-- [ ] `pkg/archive/tar.go`: fill in `CreateArchive`, `ExtractArchive`, `ListArchive`
-- [ ] `pkg/docker/client.go`: implement `InspectContainer`, `ExportContainerFilesystem`, `ListVolumes`
-- [ ] `pkg/docker/types.go`: add `ContainerInfo`, `Mount`, and `ParseContainerInfo`
-- [ ] `pkg/backup/engine.go`: implement backup (container) happy path
-- [ ] Tests: `pkg/archive/*_test.go`, `pkg/backup/*_test.go`
+### Archiving / Engine
+
+- [ ] Honor compression level in gzip writer (`archive`)
+- [x] Parallelize per-volume/bind archiving (partial)
+- [ ] Better xattrs/ACL/hardlinks (optional)
+
+### Image fidelity
+
+- [x] Save/load original image tar when possible
+- [ ] Retag original refs after load
+
+### Networks / Ports
+
+- [x] Validate HostIp presence; skip or drop
+- [ ] Detect/resolve subnet conflicts or relax static IPs automatically
+
+### Tests / CI
+
+- [ ] Add integration tests (opt-in)
+- [ ] Add GitHub Actions workflow for `go test` matrix
+
+### Docs / CLI
+
+- [ ] Update README for new flags and workflows
+- [ ] Add verbose/dry-run detail levels
