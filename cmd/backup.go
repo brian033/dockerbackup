@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"context"
-	"flag"
 	"fmt"
 
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/backup"
+	"github.com/spf13/pflag"
 )
 
 type BackupCmd struct {
@@ -37,13 +37,11 @@ func (c *BackupCmd) Validate(args []string) error {
 }
 
 func (c *BackupCmd) Execute(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
+	fs := pflag.NewFlagSet(c.Name(), pflag.ContinueOnError)
 	var output string
 	var compress int
-	fs.StringVar(&output, "output", "", "Output file path")
-	fs.StringVar(&output, "o", "", "Output file path (shorthand)")
-	fs.IntVar(&compress, "compress", 6, "Compression level (1-9)")
-	fs.IntVar(&compress, "c", 6, "Compression level (shorthand)")
+	fs.StringVarP(&output, "output", "o", "", "Output file path")
+	fs.IntVarP(&compress, "compress", "c", 6, "Compression level (1-9)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

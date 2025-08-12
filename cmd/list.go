@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"context"
-	"flag"
 	"fmt"
 
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/archive"
+	"github.com/spf13/pflag"
 )
 
 type ListCmd struct {
@@ -32,7 +32,7 @@ func (c *ListCmd) Validate(args []string) error {
 }
 
 func (c *ListCmd) Execute(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
+	fs := pflag.NewFlagSet(c.Name(), pflag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

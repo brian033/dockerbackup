@@ -2,10 +2,10 @@ package cmd
 
 import (
 	"context"
-	"flag"
 
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/backup"
+	"github.com/spf13/pflag"
 )
 
 type BackupComposeCmd struct {
@@ -31,13 +31,11 @@ Options:
 func (c *BackupComposeCmd) Validate(args []string) error { return nil }
 
 func (c *BackupComposeCmd) Execute(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
+	fs := pflag.NewFlagSet(c.Name(), pflag.ContinueOnError)
 	var output string
 	var projectName string
-	fs.StringVar(&output, "output", "", "Output file path")
-	fs.StringVar(&output, "o", "", "Output file path (shorthand)")
-	fs.StringVar(&projectName, "project-name", "", "Project name")
-	fs.StringVar(&projectName, "p", "", "Project name (shorthand)")
+	fs.StringVarP(&output, "output", "o", "", "Output file path")
+	fs.StringVarP(&projectName, "project-name", "p", "", "Project name")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

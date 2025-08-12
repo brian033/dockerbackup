@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"context"
-	"flag"
 	"fmt"
 
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/backup"
+	"github.com/spf13/pflag"
 )
 
 type RestoreComposeCmd struct {
@@ -37,11 +37,10 @@ func (c *RestoreComposeCmd) Validate(args []string) error {
 }
 
 func (c *RestoreComposeCmd) Execute(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
+	fs := pflag.NewFlagSet(c.Name(), pflag.ContinueOnError)
 	var projectName string
 	var start bool
-	fs.StringVar(&projectName, "project-name", "", "New project name")
-	fs.StringVar(&projectName, "p", "", "New project name (shorthand)")
+	fs.StringVarP(&projectName, "project-name", "p", "", "New project name")
 	fs.BoolVar(&start, "start", false, "Start services after restore")
 	if err := fs.Parse(args); err != nil {
 		return err

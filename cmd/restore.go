@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"context"
-	"flag"
 	"fmt"
 
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/backup"
+	"github.com/spf13/pflag"
 )
 
 type RestoreCmd struct {
@@ -37,11 +37,10 @@ func (c *RestoreCmd) Validate(args []string) error {
 }
 
 func (c *RestoreCmd) Execute(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
+	fs := pflag.NewFlagSet(c.Name(), pflag.ContinueOnError)
 	var name string
 	var start bool
-	fs.StringVar(&name, "name", "", "New container name")
-	fs.StringVar(&name, "n", "", "New container name (shorthand)")
+	fs.StringVarP(&name, "name", "n", "", "New container name")
 	fs.BoolVar(&start, "start", false, "Start container after restore")
 	if err := fs.Parse(args); err != nil {
 		return err
