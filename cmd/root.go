@@ -56,7 +56,9 @@ func (c *compositeClient) InspectContainer(ctx context.Context, containerID stri
 func (c *compositeClient) ExportContainerFilesystem(ctx context.Context, containerID string, destTarPath string) error {
 	return c.cli.ExportContainerFilesystem(ctx, containerID, destTarPath)
 }
-func (c *compositeClient) ListVolumes(ctx context.Context) ([]string, error) { return c.cli.ListVolumes(ctx) }
+func (c *compositeClient) ListVolumes(ctx context.Context) ([]string, error) {
+	return c.cli.ListVolumes(ctx)
+}
 func (c *compositeClient) InspectVolume(ctx context.Context, name string) (*docker.VolumeConfig, error) {
 	return c.cli.InspectVolume(ctx, name)
 }
@@ -66,7 +68,9 @@ func (c *compositeClient) InspectNetwork(ctx context.Context, name string) (*doc
 func (c *compositeClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	return c.cli.ImportImage(ctx, tarPath, ref)
 }
-func (c *compositeClient) VolumeCreate(ctx context.Context, name string) error { return c.cli.VolumeCreate(ctx, name) }
+func (c *compositeClient) VolumeCreate(ctx context.Context, name string) error {
+	return c.cli.VolumeCreate(ctx, name)
+}
 func (c *compositeClient) ExtractTarGzToVolume(ctx context.Context, volumeName string, tarGzPath string, expectedRoot string) error {
 	return c.cli.ExtractTarGzToVolume(ctx, volumeName, tarGzPath, expectedRoot)
 }
@@ -76,7 +80,11 @@ func (c *compositeClient) CreateContainer(ctx context.Context, imageRef string, 
 func (c *compositeClient) CreateContainerFromSpec(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error) {
 	return c.sdk.CreateContainerFromSpec(ctx, cfg, hostCfg, netCfg, name)
 }
-func (c *compositeClient) StartContainer(ctx context.Context, containerID string) error { return c.cli.StartContainer(ctx, containerID) }
+func (c *compositeClient) StartContainer(ctx context.Context, containerID string) error {
+	return c.cli.StartContainer(ctx, containerID)
+}
+func (c *compositeClient) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error { return c.sdk.EnsureVolume(ctx, cfg) }
+func (c *compositeClient) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error { return c.sdk.EnsureNetwork(ctx, cfg) }
 
 func Execute() {
 	log := logger.New()

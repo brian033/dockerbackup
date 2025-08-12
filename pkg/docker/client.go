@@ -3,13 +3,13 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"encoding/json"
 
 	internalerrors "github.com/brian033/dockerbackup/internal/errors"
 	"github.com/docker/docker/api/types/container"
@@ -26,6 +26,10 @@ type DockerClient interface {
 	// Config inspections
 	InspectVolume(ctx context.Context, name string) (*VolumeConfig, error)
 	InspectNetwork(ctx context.Context, name string) (*NetworkConfig, error)
+
+	// Ensure resources exist with original options (SDK preferred)
+	EnsureVolume(ctx context.Context, cfg VolumeConfig) error
+	EnsureNetwork(ctx context.Context, cfg NetworkConfig) error
 
 	// Restore-related
 	ImportImage(ctx context.Context, tarPath string, ref string) (string, error)
@@ -152,7 +156,7 @@ func (c *CLIClient) InspectNetwork(ctx context.Context, name string) (*NetworkCo
 		Attachable: arr[0].Attachable,
 		Ingress:    arr[0].Ingress,
 		Labels:     arr[0].Labels,
-		IPAM: IPAM{Driver: arr[0].IPAM.Driver},
+		IPAM:       IPAM{Driver: arr[0].IPAM.Driver},
 	}
 	for _, c := range arr[0].IPAM.Config {
 		nc.IPAM.Config = append(nc.IPAM.Config, IPAMConfig{Subnet: c.Subnet, Gateway: c.Gateway, IPRange: c.IPRange})
@@ -258,4 +262,12 @@ func (c *CLIClient) StartContainer(ctx context.Context, containerID string) erro
 		return fmt.Errorf("docker start failed: %v: %s", err, stderr.String())
 	}
 	return nil
+}
+
+func (c *CLIClient) EnsureVolume(ctx context.Context, cfg VolumeConfig) error {
+	return internalerrors.ErrNotImplemented
+}
+
+func (c *CLIClient) EnsureNetwork(ctx context.Context, cfg NetworkConfig) error {
+	return internalerrors.ErrNotImplemented
 }

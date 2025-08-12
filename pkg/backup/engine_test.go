@@ -46,6 +46,8 @@ func (f *fakeDockerClient) InspectVolume(ctx context.Context, name string) (*doc
 func (f *fakeDockerClient) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
 	return nil, nil
 }
+func (f *fakeDockerClient) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error { return nil }
+func (f *fakeDockerClient) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error { return nil }
 func (f *fakeDockerClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	return "image123", nil
 }
@@ -82,6 +84,8 @@ func (f *fakeDockerClientRestore) InspectVolume(ctx context.Context, name string
 func (f *fakeDockerClientRestore) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
 	return nil, nil
 }
+func (f *fakeDockerClientRestore) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error { return nil }
+func (f *fakeDockerClientRestore) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error { return nil }
 func (f *fakeDockerClientRestore) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	f.createdImageRef = "imported:" + filepath.Base(tarPath)
 	return f.createdImageRef, nil
@@ -212,7 +216,7 @@ func TestDefaultBackupEngine_Backup_WithVolume(t *testing.T) {
 	_, err := engine.Backup(ctx, BackupRequest{
 		TargetType:  TargetContainer,
 		ContainerID: "unit_test",
-		Options: BackupOptions{OutputPath: out},
+		Options:     BackupOptions{OutputPath: out},
 	})
 	if err != nil {
 		t.Fatalf("backup failed: %v", err)
@@ -262,7 +266,7 @@ func TestDefaultBackupEngine_Backup_WithBindMount(t *testing.T) {
 	_, err := engine.Backup(ctx, BackupRequest{
 		TargetType:  TargetContainer,
 		ContainerID: "unit_test",
-		Options: BackupOptions{OutputPath: out},
+		Options:     BackupOptions{OutputPath: out},
 	})
 	if err != nil {
 		t.Fatalf("backup failed: %v", err)
@@ -289,7 +293,11 @@ func TestDefaultBackupEngine_Validate(t *testing.T) {
 
 	// valid archive
 	work := t.TempDir()
-	mustWrite := func(p string) { if err := os.WriteFile(p, []byte("x"), 0o644); err != nil { t.Fatalf("write %s: %v", p, err) } }
+	mustWrite := func(p string) {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
 	mustWrite(filepath.Join(work, "container.json"))
 	mustWrite(filepath.Join(work, "filesystem.tar"))
 	mustWrite(filepath.Join(work, "metadata.json"))
@@ -398,7 +406,9 @@ func TestBackup_CapturesVolumeAndNetworkConfigs(t *testing.T) {
 		ContainerID: "unit_test",
 		Options:     BackupOptions{OutputPath: out},
 	})
-	if err != nil { t.Fatalf("backup failed: %v", err) }
+	if err != nil {
+		t.Fatalf("backup failed: %v", err)
+	}
 
 	// Extract and verify config files exist
 	dir := t.TempDir()

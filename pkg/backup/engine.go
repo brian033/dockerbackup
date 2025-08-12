@@ -286,9 +286,10 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		_ = json.Unmarshal(b, &netCfgs)
 	}
 
-	// Ensure networks exist before create
-	// Note: we rely on Docker daemon defaults for options; full recreation via SDK NetworkCreate can be added to DockerClient later.
-	_ = netCfgs // reserved for future create if needed
+	// Ensure networks exist
+	for _, nc := range netCfgs {
+		_ = e.dockerClient.EnsureNetwork(ctx, nc)
+	}
 
 	// Effective mounts from inspect
 	effectiveMounts := make([]docker.Mount, 0, len(cj.Mounts))
@@ -303,6 +304,11 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 			Type:        mt,
 			RW:          m.RW,
 		})
+	}
+
+	// Ensure volumes exist using captured driver/options before data restore
+	for _, vc := range volCfgs {
+		_ = e.dockerClient.EnsureVolume(ctx, vc)
 	}
 
 	// Restore volumes and bind mounts data; create volumes using VolumeCreate (driver/options not yet wired into CLI variant)

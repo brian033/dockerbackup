@@ -7,10 +7,10 @@ import (
 // ContainerInfo captures minimal fields we need from `docker inspect` JSON
 // This is intentionally small for v0.
 type ContainerInfo struct {
-	ID     string           `json:"Id"`
-	Name   string           `json:"Name"`
-	Mounts []Mount          `json:"Mounts"`
-	Config json.RawMessage  `json:"Config"` // raw for future use
+	ID     string          `json:"Id"`
+	Name   string          `json:"Name"`
+	Mounts []Mount         `json:"Mounts"`
+	Config json.RawMessage `json:"Config"` // raw for future use
 }
 
 type Mount struct {
