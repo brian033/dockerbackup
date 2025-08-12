@@ -12,6 +12,9 @@ import (
 	"github.com/brian033/dockerbackup/pkg/archive"
 	"github.com/brian033/dockerbackup/pkg/docker"
 	"github.com/brian033/dockerbackup/pkg/filesystem"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 )
 
 type fakeDockerClient struct {
@@ -49,6 +52,9 @@ func (f *fakeDockerClient) ExtractTarGzToVolume(ctx context.Context, volumeName 
 func (f *fakeDockerClient) CreateContainer(ctx context.Context, imageRef string, name string, mounts []docker.Mount) (string, error) {
 	return "container123", nil
 }
+func (f *fakeDockerClient) CreateContainerFromSpec(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error) {
+	return "container123", nil
+}
 func (f *fakeDockerClient) StartContainer(ctx context.Context, containerID string) error { return nil }
 
 type fakeDockerClientRestore struct {
@@ -79,6 +85,10 @@ func (f *fakeDockerClientRestore) ExtractTarGzToVolume(ctx context.Context, volu
 	return nil
 }
 func (f *fakeDockerClientRestore) CreateContainer(ctx context.Context, imageRef string, name string, mounts []docker.Mount) (string, error) {
+	f.createdContainer = name
+	return "container123", nil
+}
+func (f *fakeDockerClientRestore) CreateContainerFromSpec(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error) {
 	f.createdContainer = name
 	return "container123", nil
 }
@@ -289,9 +299,9 @@ func TestDefaultBackupEngine_Restore_Minimal(t *testing.T) {
 
 	// Create a minimal valid backup archive
 	work := t.TempDir()
-	// container.json with no mounts
-	inspect := []map[string]any{{"Id": "123", "Name": "/unit_test", "Mounts": []map[string]any{}}}
-	b, _ := json.Marshal(inspect)
+	// container.json as single object matching types.ContainerJSON minimal fields
+	cj := types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{ID: "123", Name: "/unit_test"}}
+	b, _ := json.Marshal(cj)
 	if err := os.WriteFile(filepath.Join(work, "container.json"), b, 0o644); err != nil {
 		t.Fatalf("write container.json: %v", err)
 	}

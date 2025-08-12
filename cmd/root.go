@@ -14,6 +14,8 @@ import (
 	"github.com/brian033/dockerbackup/pkg/backup"
 	"github.com/brian033/dockerbackup/pkg/docker"
 	"github.com/brian033/dockerbackup/pkg/filesystem"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 )
 
 type Command interface {
@@ -31,10 +33,44 @@ func RegisterCommand(cmd Command) {
 
 func newDefaultEngine(log logger.Logger) backup.BackupEngine {
 	arch := archive.NewTarArchiveHandler()
-	dc := docker.NewCLIClient()
+	// Prefer SDK client when available
+	var dc docker.DockerClient
+	if sdk, err := docker.NewSDKClient(); err == nil {
+		// Wrap SDK to satisfy DockerClient via CreateContainerFromSpec while reusing CLI for other methods
+		dc = &compositeClient{sdk: sdk, cli: docker.NewCLIClient()}
+	} else {
+		dc = docker.NewCLIClient()
+	}
 	fs := filesystem.NewHandler()
 	return backup.NewDefaultBackupEngine(arch, dc, fs, log)
 }
+
+type compositeClient struct {
+	sdk *docker.SDKClient
+	cli docker.DockerClient
+}
+
+func (c *compositeClient) InspectContainer(ctx context.Context, containerID string) ([]byte, error) {
+	return c.cli.InspectContainer(ctx, containerID)
+}
+func (c *compositeClient) ExportContainerFilesystem(ctx context.Context, containerID string, destTarPath string) error {
+	return c.cli.ExportContainerFilesystem(ctx, containerID, destTarPath)
+}
+func (c *compositeClient) ListVolumes(ctx context.Context) ([]string, error) { return c.cli.ListVolumes(ctx) }
+func (c *compositeClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
+	return c.cli.ImportImage(ctx, tarPath, ref)
+}
+func (c *compositeClient) VolumeCreate(ctx context.Context, name string) error { return c.cli.VolumeCreate(ctx, name) }
+func (c *compositeClient) ExtractTarGzToVolume(ctx context.Context, volumeName string, tarGzPath string, expectedRoot string) error {
+	return c.cli.ExtractTarGzToVolume(ctx, volumeName, tarGzPath, expectedRoot)
+}
+func (c *compositeClient) CreateContainer(ctx context.Context, imageRef string, name string, mounts []docker.Mount) (string, error) {
+	return c.cli.CreateContainer(ctx, imageRef, name, mounts)
+}
+func (c *compositeClient) CreateContainerFromSpec(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error) {
+	return c.sdk.CreateContainerFromSpec(ctx, cfg, hostCfg, netCfg, name)
+}
+func (c *compositeClient) StartContainer(ctx context.Context, containerID string) error { return c.cli.StartContainer(ctx, containerID) }
 
 func Execute() {
 	log := logger.New()

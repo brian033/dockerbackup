@@ -17,6 +17,10 @@ import (
 	"github.com/brian033/dockerbackup/pkg/archive"
 	"github.com/brian033/dockerbackup/pkg/docker"
 	"github.com/brian033/dockerbackup/pkg/filesystem"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	dockermount "github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 )
 
 type BackupTargetType string
@@ -204,15 +208,19 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		return nil, &errors.OperationError{Op: "extract backup", Err: err}
 	}
 
-	// Read container.json to recover mounts and name
+	// Read container.json (docker inspect). Support both single object and array forms.
 	containerJSONPath := filepath.Join(tmpDir, "container.json")
 	b, err := os.ReadFile(containerJSONPath)
 	if err != nil {
 		return nil, &errors.OperationError{Op: "read container.json", Err: err}
 	}
-	info, err := docker.ParseContainerInfo(b)
-	if err != nil {
-		return nil, &errors.OperationError{Op: "parse container.json", Err: err}
+	var cj types.ContainerJSON
+	if err := json.Unmarshal(b, &cj); err != nil || cj.ContainerJSONBase == nil {
+		var arr []types.ContainerJSON
+		if err2 := json.Unmarshal(b, &arr); err2 != nil || len(arr) == 0 || arr[0].ContainerJSONBase == nil {
+			return nil, &errors.OperationError{Op: "unmarshal container.json", Err: err2}
+		}
+		cj = arr[0]
 	}
 
 	// Import filesystem to new image
@@ -228,33 +236,39 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		return nil, &errors.OperationError{Op: "filesystem.tar missing", Err: err}
 	}
 
-	// Restore volumes and bind mounts
-	volsDir := filepath.Join(tmpDir, "volumes")
-	_ = volsDir
+	// Effective mounts from inspect
+	effectiveMounts := make([]docker.Mount, 0, len(cj.Mounts))
+	for _, m := range cj.Mounts {
+		mt := string(m.Type)
+		name := m.Name
+		src := m.Source
+		effectiveMounts = append(effectiveMounts, docker.Mount{
+			Name:        name,
+			Source:      src,
+			Destination: m.Destination,
+			Type:        mt,
+			RW:          m.RW,
+		})
+	}
 
-	// Prepare mounts for new container
-	var mounts []docker.Mount
-	for _, m := range info.Mounts {
-		if m.Type == "volume" {
-			// Ensure volume exists
+	// Restore volumes and bind mounts data
+	for _, m := range effectiveMounts {
+		if m.Type == "volume" && m.Name != "" {
 			if err := e.dockerClient.VolumeCreate(ctx, m.Name); err != nil {
 				return nil, &errors.OperationError{Op: fmt.Sprintf("create volume %s", m.Name), Err: err}
 			}
-			// Restore from volumes/<name>.tar.gz (if present)
 			volTarGz := filepath.Join(tmpDir, "volumes", fmt.Sprintf("%s.tar.gz", m.Name))
 			if _, err := os.Stat(volTarGz); err == nil {
 				if err := e.dockerClient.ExtractTarGzToVolume(ctx, m.Name, volTarGz, m.Name); err != nil {
 					return nil, &errors.OperationError{Op: fmt.Sprintf("restore volume %s", m.Name), Err: err}
 				}
 			}
-			mounts = append(mounts, docker.Mount{Name: m.Name, Destination: m.Destination, Type: "volume", RW: m.RW})
-		} else if m.Type == "bind" {
-			// Extract bind tarball if present
+		}
+		if m.Type == "bind" && m.Source != "" {
 			base := filepath.Base(m.Source)
 			bindName := fmt.Sprintf("bind_%s", safeName(base))
 			bindTarGz := filepath.Join(tmpDir, "volumes", fmt.Sprintf("%s.tar.gz", bindName))
 			if _, err := os.Stat(bindTarGz); err == nil {
-				// Ensure host path exists
 				if err := os.MkdirAll(m.Source, 0o755); err != nil {
 					return nil, &errors.OperationError{Op: fmt.Sprintf("mkdir bind path %s", m.Source), Err: err}
 				}
@@ -262,19 +276,79 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 					return nil, &errors.OperationError{Op: fmt.Sprintf("restore bind mount %s", m.Source), Err: err}
 				}
 			}
-			mounts = append(mounts, docker.Mount{Source: m.Source, Destination: m.Destination, Type: "bind", RW: m.RW})
 		}
 	}
 
-	// Create container with restored mounts
-	newName := info.Name
+	// Build Docker SDK Config/HostConfig/NetworkingConfig from inspect
+	cfg := cj.Config
+	if cfg == nil {
+		cfg = &container.Config{}
+	}
+	hostCfg := cj.HostConfig
+	if hostCfg == nil {
+		hostCfg = &container.HostConfig{}
+	}
+	// Ensure the image points to the imported one
+	cfg.Image = imageRef
+
+	// If HostConfig.Mounts empty, translate from effective mounts
+	if len(hostCfg.Mounts) == 0 && len(effectiveMounts) > 0 {
+		for _, m := range effectiveMounts {
+			mt := dockermount.TypeBind
+			if m.Type == "volume" {
+				mt = dockermount.TypeVolume
+			}
+			ro := !m.RW
+			source := m.Source
+			if m.Type == "volume" && m.Name != "" {
+				source = m.Name
+			}
+			hostCfg.Mounts = append(hostCfg.Mounts, dockermount.Mount{
+				Type:     mt,
+				Source:   source,
+				Target:   m.Destination,
+				ReadOnly: ro,
+			})
+		}
+	}
+
+	// NetworkingConfig from NetworkSettings.Networks
+	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{}}
+	if cj.NetworkSettings != nil && cj.NetworkSettings.Networks != nil {
+		for name, ns := range cj.NetworkSettings.Networks {
+			netCfg.EndpointsConfig[name] = &network.EndpointSettings{
+				Aliases:    ns.Aliases,
+				IPAMConfig: ns.IPAMConfig,
+			}
+		}
+	}
+
+	// Determine new name
+	newName := cj.Name
+	if strings.HasPrefix(newName, "/") {
+		newName = strings.TrimPrefix(newName, "/")
+	}
 	if request.Options.ContainerName != "" {
 		newName = request.Options.ContainerName
 	}
-	containerID, err := e.dockerClient.CreateContainer(ctx, imageRef, newName, mounts)
-	if err != nil {
-		return nil, &errors.OperationError{Op: "docker create", Err: err}
+
+	// Prefer SDK-based creation if available
+	containerID, err := e.dockerClient.CreateContainerFromSpec(ctx, cfg, hostCfg, netCfg, newName)
+	if err != nil && !strings.Contains(err.Error(), "not implemented") {
+		return nil, &errors.OperationError{Op: "container create from spec", Err: err}
 	}
+	if err != nil {
+		// Fallback to CLI create using minimal info
+		var mounts []docker.Mount
+		for _, m := range effectiveMounts {
+			mounts = append(mounts, docker.Mount{Name: m.Name, Source: m.Source, Destination: m.Destination, Type: m.Type, RW: m.RW})
+		}
+		containerID, err = e.dockerClient.CreateContainer(ctx, imageRef, newName, mounts)
+		if err != nil {
+			return nil, &errors.OperationError{Op: "docker create", Err: err}
+		}
+	}
+
 	if request.Options.Start {
 		if err := e.dockerClient.StartContainer(ctx, containerID); err != nil {
 			return nil, &errors.OperationError{Op: "docker start", Err: err}

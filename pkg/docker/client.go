@@ -9,6 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	internalerrors "github.com/brian033/dockerbackup/internal/errors"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 )
 
 var ErrEmptyInspect = errors.New("docker inspect returned empty result")
@@ -23,6 +27,7 @@ type DockerClient interface {
 	VolumeCreate(ctx context.Context, name string) error
 	ExtractTarGzToVolume(ctx context.Context, volumeName string, tarGzPath string, expectedRoot string) error
 	CreateContainer(ctx context.Context, imageRef string, name string, mounts []Mount) (string, error)
+	CreateContainerFromSpec(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error)
 	StartContainer(ctx context.Context, containerID string) error
 }
 
@@ -169,6 +174,10 @@ func (c *CLIClient) CreateContainer(ctx context.Context, imageRef string, name s
 	}
 	containerID := strings.TrimSpace(stdout.String())
 	return containerID, nil
+}
+
+func (c *CLIClient) CreateContainerFromSpec(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error) {
+	return "", internalerrors.ErrNotImplemented
 }
 
 func (c *CLIClient) StartContainer(ctx context.Context, containerID string) error {
