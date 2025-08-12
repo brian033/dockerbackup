@@ -38,7 +38,6 @@ dockerbackup backup a1b2c3d4e5f6
 ```
 
 #### Backup Options
-
 - `--output, -o`: Specify output file path (default: `<container_name>_backup.tar.gz`)
 - `--compress, -c`: Compression level (1-9, default: 6)
 
@@ -52,10 +51,26 @@ dockerbackup restore <backup_file> [options]
 dockerbackup restore my-app_backup.tar.gz
 ```
 
-#### Restore Options
-
+#### Restore Options (portability and safety)
 - `--name, -n`: Specify new container name (default: original container name)
 - `--start`: Start container immediately after restore
+- `--wait-healthy`: Wait for HEALTHCHECK to report healthy (auto-skips if no healthcheck)
+- `--wait-timeout <seconds>`: Max seconds to wait with `--wait-healthy` (default ~120)
+- `--replace`: Stop/remove existing container with the same name before restoring
+- `--bind-restore-root <path>`: If a bind mount source path doesn't exist on the host, restore it under `<path>/<basename>`
+- `--network-map old:new`: Map network names from backup to target (repeatable)
+- `--parent-map net:parentIf`: Override macvlan/ipvlan parent interface per network (repeatable)
+- `--fallback-bridge`: If macvlan/ipvlan parent isn't available, use the bridge driver
+- `--drop-host-ips`: Ignore HostIp in port bindings if that IP isn't present on the host (bind to all interfaces)
+- `--reassign-ips`: Ignore saved static container IPs and let Docker assign dynamically
+- `--auto-relax-ips`: If a static IPv4 conflicts with a host subnet, automatically drop the static IP so Docker assigns
+- `--force-bind-ip <ip>`: Force all port bindings to use a specific host IP
+- `--bind-interface <name>`: Prefer this interface's primary IPv4 for port bindings when HostIp is missing
+- Safe mode:
+  - `--drop-devices`: Drop `HostConfig.Devices`
+  - `--drop-caps`: Drop `CapAdd/CapDrop`
+  - `--drop-seccomp`: Drop `SecurityOpt` seccomp profile
+  - `--drop-apparmor`: Drop `SecurityOpt` apparmor profile
 
 ### Backup Docker Compose Project
 
@@ -69,7 +84,6 @@ dockerbackup backup-compose /path/to/project    # Backup specific project
 ```
 
 #### Compose Backup Options
-
 - `--output, -o`: Specify output file path (default: `<project_name>_compose_backup.tar.gz`)
 - `--project-name, -p`: Override project name detection
 
@@ -84,15 +98,24 @@ dockerbackup restore-compose my-project_compose_backup.tar.gz
 ```
 
 #### Compose Restore Options
+- Inherits all container restore portability/safety options (applied per service)
+- Starts services in dependency order (from `depends_on` when present)
 
-- `--project-name, -p`: Specify new project name (default: original project name)
-- `--start`: Start all services immediately after restore
-
-### List Backup Contents
+### Validate and Dry-Run
 
 ```bash
-# View backup file contents
-dockerbackup list <backup_file>
+# Validate a backup archive structure
+dockerbackup validate <backup_file>
+
+# Show a plan of what would be restored (no changes)
+dockerbackup dry-run-restore <backup_file>
+```
+
+- `dry-run-restore` shows a summary plan and hints for ports, networks, volumes, mounts, and env.
+- For more detail in logs (all commands), enable verbose output:
+
+```bash
+DOCKERBACKUP_DEBUG=1 dockerbackup dry-run-restore <backup_file>
 ```
 
 ## Single Container Backup Process
@@ -106,34 +129,29 @@ dockerbackup list <backup_file>
 ## Single Container Restore Process
 
 1. **Extract Backup**: Decompress backup file
-2. **Load Filesystem**: Create new image using `docker import`
+2. **Load Filesystem**: Prefer `docker load image.tar`, fallback to `docker import filesystem.tar`
 3. **Restore Volumes**: Recreate volumes and data
-4. **Create Container**: Create new container based on original configuration
-5. **Start Container**: (Optional) Start the restored container
+4. **Create Container**: Create new container based on original configuration and portability/safety flags
+5. **Start Container**: (Optional) Start the restored container and optionally wait for healthy
 
 ## Compose Project Backup Process
 
-1. **Project Discovery**: Parse `docker-compose.yml` and identify all services
-2. **Container Mapping**: Map services to running containers
-3. **Shared Resources**: Identify shared volumes and networks
-4. **Project Files**: Backup compose files, .env, and related configurations
-5. **Multi-Container Backup**: Execute backup process for each service container
-6. **Dependencies**: Record service startup order and dependencies
-7. **Package**: Compress all project data into tar.gz file
+1. **Project Discovery**: Parse `docker-compose.yml` and identify services
+2. **Per-Service Backup**: Backup each service container individually
+3. **Networks/Volumes**: Capture network/volume configs
+4. **Project Files**: Backup compose files and `.env`
+5. **Package**: Compress into tar.gz
 
 ## Compose Project Restore Process
 
-1. **Extract Backup**: Decompress project backup file
-2. **Project Setup**: Recreate project directory and compose files
-3. **Networks & Volumes**: Recreate shared networks and volumes
-4. **Container Restore**: Restore each service container individually
-5. **Dependencies**: Respect original service dependencies and startup order
-6. **Start Services**: (Optional) Start all services with `docker-compose up`
+1. **Extract Backup**
+2. **Networks & Volumes**: Ensure project networks and volumes exist (driver/options/IPAM)
+3. **Per-Service Restore**: Restore each service container; apply portability/safety flags
+4. **Order & Startup**: Start services in dependency order (from `depends_on`)
 
 ## Backup File Structure
 
 ### Single Container Backup
-
 ```
 container_backup.tar.gz
 ├── container.json          # Complete container configuration
@@ -141,11 +159,13 @@ container_backup.tar.gz
 ├── volumes/                # Volume data
 │   ├── volume1.tar.gz
 │   └── volume2.tar.gz
+├── networks/               # Network configs (optional)
+│   └── network_configs.json
+├── image.tar               # Original image (optional)
 └── metadata.json          # Backup information and version
 ```
 
 ### Compose Project Backup
-
 ```
 project_compose_backup.tar.gz
 ├── compose-files/          # Project configuration files
@@ -153,18 +173,15 @@ project_compose_backup.tar.gz
 │   ├── .env
 │   ├── docker-compose.override.yml
 │   └── other-configs/
-├── containers/             # Individual container backups
+├── containers/             # Per-service container backups
 │   ├── service1/
-│   │   ├── container.json
-│   │   ├── filesystem.tar
-│   │   └── volumes/
+│   │   └── container.tar.gz
 │   └── service2/
 │       └── ...
-├── shared-volumes/         # Shared volumes across services
-│   ├── shared_vol1.tar.gz
-│   └── shared_vol2.tar.gz
 ├── networks/               # Network configurations
 │   └── network_configs.json
+├── volumes/                # Volume configurations
+│   └── volume_configs.json
 └── metadata.json          # Project backup information
 ```
 
@@ -193,6 +210,10 @@ go build -o dockerbackup
 # Run
 ./dockerbackup --help
 ```
+
+## Verbose Logs
+
+Set `DOCKERBACKUP_DEBUG=1` to enable verbose logs across commands (including dry-run) for more detail.
 
 ## Contributing
 
