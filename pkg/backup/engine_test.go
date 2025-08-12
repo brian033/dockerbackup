@@ -142,6 +142,55 @@ func TestDefaultBackupEngine_Backup_WithVolume(t *testing.T) {
 	}
 }
 
+func TestDefaultBackupEngine_Backup_WithBindMount(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New()
+	arch := archive.NewTarArchiveHandler()
+	fs := filesystem.NewHandler()
+
+	bindSrc := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bindSrc, "host.txt"), []byte("host"), 0o644); err != nil {
+		t.Fatalf("write bind file: %v", err)
+	}
+	inspect := []map[string]any{
+		{
+			"Id":   "123",
+			"Name": "/unit_test",
+			"Mounts": []map[string]any{
+				{"Source": bindSrc, "Destination": "/data", "Type": "bind", "RW": true},
+			},
+		},
+	}
+	b, _ := json.Marshal(inspect)
+	dc := &fakeDockerClient{inspectJSON: b}
+
+	engine := NewDefaultBackupEngine(arch, dc, fs, log)
+
+	out := filepath.Join(t.TempDir(), "out.tar.gz")
+	_, err := engine.Backup(ctx, BackupRequest{
+		TargetType:  TargetContainer,
+		ContainerID: "unit_test",
+		Options: BackupOptions{OutputPath: out},
+	})
+	if err != nil {
+		t.Fatalf("backup failed: %v", err)
+	}
+	entries, err := arch.ListArchive(ctx, out)
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	var foundBind bool
+	for _, e := range entries {
+		if strings.HasPrefix(e.Path, "volumes/") && strings.Contains(e.Path, "bind_") && strings.HasSuffix(e.Path, ".tar.gz") {
+			foundBind = true
+			break
+		}
+	}
+	if !foundBind {
+		t.Fatalf("expected a bind mount archive under volumes/bind_*.tar.gz")
+	}
+}
+
 func TestDefaultBackupEngine_Validate(t *testing.T) {
 	ctx := context.Background()
 	arch := archive.NewTarArchiveHandler()

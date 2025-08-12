@@ -127,20 +127,33 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 		return nil, &errors.OperationError{Op: "export container filesystem", Err: err}
 	}
 
-	// Archive named volumes
+	// Archive named volumes and bind mounts (Linux supported)
 	includesVolumes := false
 	if err := os.MkdirAll(volumesDir, 0o755); err != nil {
 		return nil, &errors.OperationError{Op: "create volumes dir", Err: err}
 	}
 	for _, m := range info.Mounts {
+		// Named volumes
 		if m.Type == "volume" && m.Name != "" && m.Source != "" {
 			includesVolumes = true
 			volTarGz := filepath.Join(volumesDir, fmt.Sprintf("%s.tar.gz", safeName(m.Name)))
-			// Create archive for the volume source directory
 			src := archive.ArchiveSource{Path: m.Source, DestPath: m.Name}
 			if err := e.archiveHandler.CreateArchive(ctx, []archive.ArchiveSource{src}, volTarGz); err != nil {
 				return nil, &errors.OperationError{Op: fmt.Sprintf("archive volume %s", m.Name), Err: err}
 			}
+			continue
+		}
+		// Bind mounts (host directories)
+		if m.Type == "bind" && m.Source != "" {
+			includesVolumes = true
+			base := filepath.Base(m.Source)
+			name := fmt.Sprintf("bind_%s", safeName(base))
+			volTarGz := filepath.Join(volumesDir, fmt.Sprintf("%s.tar.gz", name))
+			src := archive.ArchiveSource{Path: m.Source, DestPath: base}
+			if err := e.archiveHandler.CreateArchive(ctx, []archive.ArchiveSource{src}, volTarGz); err != nil {
+				return nil, &errors.OperationError{Op: fmt.Sprintf("archive bind mount %s", m.Source), Err: err}
+			}
+			continue
 		}
 	}
 
