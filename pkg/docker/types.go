@@ -7,10 +7,10 @@ import (
 // ContainerInfo captures minimal fields we need from `docker inspect` JSON
 // This is intentionally small for v0.
 type ContainerInfo struct {
-	ID    string          `json:"Id"`
-	Name  string          `json:"Name"`
-	Mounts []Mount        `json:"Mounts"`
-	Config json.RawMessage `json:"Config"` // raw for future use
+	ID     string           `json:"Id"`
+	Name   string           `json:"Name"`
+	Mounts []Mount          `json:"Mounts"`
+	Config json.RawMessage  `json:"Config"` // raw for future use
 }
 
 type Mount struct {
@@ -25,7 +25,7 @@ func ParseContainerInfo(inspectJSON []byte) (ContainerInfo, error) {
 	// docker inspect returns an array
 	var arr []ContainerInfo
 	if err := json.Unmarshal(inspectJSON, &arr); err != nil {
-		return ContainerInfo{}, err
+		return ContainerInfo{}, ErrEmptyInspect
 	}
 	if len(arr) == 0 {
 		return ContainerInfo{}, ErrEmptyInspect
@@ -36,4 +36,35 @@ func ParseContainerInfo(inspectJSON []byte) (ContainerInfo, error) {
 		info.Name = info.Name[1:]
 	}
 	return info, nil
+}
+
+// VolumeConfig captures docker volume inspect essentials
+type VolumeConfig struct {
+	Name    string            `json:"Name"`
+	Driver  string            `json:"Driver"`
+	Options map[string]string `json:"Options"`
+	Labels  map[string]string `json:"Labels"`
+}
+
+// NetworkConfig captures docker network inspect essentials
+type NetworkConfig struct {
+	Name       string            `json:"Name"`
+	Driver     string            `json:"Driver"`
+	Options    map[string]string `json:"Options"`
+	Internal   bool              `json:"Internal"`
+	Attachable bool              `json:"Attachable"`
+	Ingress    bool              `json:"Ingress"`
+	IPAM       IPAM              `json:"IPAM"`
+	Labels     map[string]string `json:"Labels"`
+}
+
+type IPAM struct {
+	Driver string       `json:"Driver"`
+	Config []IPAMConfig `json:"Config"`
+}
+
+type IPAMConfig struct {
+	Subnet  string `json:"Subnet"`
+	Gateway string `json:"Gateway"`
+	IPRange string `json:"IPRange"`
 }

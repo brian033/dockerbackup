@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"encoding/json"
 
 	internalerrors "github.com/brian033/dockerbackup/internal/errors"
 	"github.com/docker/docker/api/types/container"
@@ -21,6 +22,10 @@ type DockerClient interface {
 	InspectContainer(ctx context.Context, containerID string) ([]byte, error)
 	ExportContainerFilesystem(ctx context.Context, containerID string, destTarPath string) error
 	ListVolumes(ctx context.Context) ([]string, error)
+
+	// Config inspections
+	InspectVolume(ctx context.Context, name string) (*VolumeConfig, error)
+	InspectNetwork(ctx context.Context, name string) (*NetworkConfig, error)
 
 	// Restore-related
 	ImportImage(ctx context.Context, tarPath string, ref string) (string, error)
@@ -88,6 +93,71 @@ func (c *CLIClient) ListVolumes(ctx context.Context) ([]string, error) {
 		}
 	}
 	return vols, nil
+}
+
+func (c *CLIClient) InspectVolume(ctx context.Context, name string) (*VolumeConfig, error) {
+	cmd := exec.CommandContext(ctx, "docker", "volume", "inspect", name)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("docker volume inspect %s failed: %v: %s", name, err, stderr.String())
+	}
+	var arr []struct {
+		Name    string            `json:"Name"`
+		Driver  string            `json:"Driver"`
+		Options map[string]string `json:"Options"`
+		Labels  map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &arr); err != nil || len(arr) == 0 {
+		return nil, fmt.Errorf("parse volume inspect for %s failed: %v", name, err)
+	}
+	v := &VolumeConfig{Name: arr[0].Name, Driver: arr[0].Driver, Options: arr[0].Options, Labels: arr[0].Labels}
+	return v, nil
+}
+
+func (c *CLIClient) InspectNetwork(ctx context.Context, name string) (*NetworkConfig, error) {
+	cmd := exec.CommandContext(ctx, "docker", "network", "inspect", name)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("docker network inspect %s failed: %v: %s", name, err, stderr.String())
+	}
+	var arr []struct {
+		Name       string            `json:"Name"`
+		Driver     string            `json:"Driver"`
+		Options    map[string]string `json:"Options"`
+		Internal   bool              `json:"Internal"`
+		Attachable bool              `json:"Attachable"`
+		Ingress    bool              `json:"Ingress"`
+		IPAM       struct {
+			Driver string `json:"Driver"`
+			Config []struct {
+				Subnet  string `json:"Subnet"`
+				Gateway string `json:"Gateway"`
+				IPRange string `json:"IPRange"`
+			} `json:"Config"`
+		} `json:"IPAM"`
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &arr); err != nil || len(arr) == 0 {
+		return nil, fmt.Errorf("parse network inspect for %s failed: %v", name, err)
+	}
+	nc := &NetworkConfig{
+		Name:       arr[0].Name,
+		Driver:     arr[0].Driver,
+		Options:    arr[0].Options,
+		Internal:   arr[0].Internal,
+		Attachable: arr[0].Attachable,
+		Ingress:    arr[0].Ingress,
+		Labels:     arr[0].Labels,
+		IPAM: IPAM{Driver: arr[0].IPAM.Driver},
+	}
+	for _, c := range arr[0].IPAM.Config {
+		nc.IPAM.Config = append(nc.IPAM.Config, IPAMConfig{Subnet: c.Subnet, Gateway: c.Gateway, IPRange: c.IPRange})
+	}
+	return nc, nil
 }
 
 func (c *CLIClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {

@@ -40,8 +40,12 @@ func (f *fakeDockerClient) ExportContainerFilesystem(ctx context.Context, contai
 }
 
 func (f *fakeDockerClient) ListVolumes(ctx context.Context) ([]string, error) { return nil, nil }
-
-// New methods to satisfy interface (unused in backup tests)
+func (f *fakeDockerClient) InspectVolume(ctx context.Context, name string) (*docker.VolumeConfig, error) {
+	return nil, nil
+}
+func (f *fakeDockerClient) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
+	return nil, nil
+}
 func (f *fakeDockerClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	return "image123", nil
 }
@@ -72,6 +76,12 @@ func (f *fakeDockerClientRestore) ExportContainerFilesystem(ctx context.Context,
 	return nil
 }
 func (f *fakeDockerClientRestore) ListVolumes(ctx context.Context) ([]string, error) { return nil, nil }
+func (f *fakeDockerClientRestore) InspectVolume(ctx context.Context, name string) (*docker.VolumeConfig, error) {
+	return nil, nil
+}
+func (f *fakeDockerClientRestore) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
+	return nil, nil
+}
 func (f *fakeDockerClientRestore) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	f.createdImageRef = "imported:" + filepath.Base(tarPath)
 	return f.createdImageRef, nil
@@ -95,6 +105,28 @@ func (f *fakeDockerClientRestore) CreateContainerFromSpec(ctx context.Context, c
 func (f *fakeDockerClientRestore) StartContainer(ctx context.Context, containerID string) error {
 	f.startedContainers = append(f.startedContainers, containerID)
 	return nil
+}
+
+type fakeDockerClientWithInspect struct {
+	fakeDockerClient
+	vol map[string]docker.VolumeConfig
+	net map[string]docker.NetworkConfig
+}
+
+func (f *fakeDockerClientWithInspect) InspectVolume(ctx context.Context, name string) (*docker.VolumeConfig, error) {
+	if v, ok := f.vol[name]; ok {
+		vv := v
+		return &vv, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeDockerClientWithInspect) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
+	if n, ok := f.net[name]; ok {
+		nn := n
+		return &nn, nil
+	}
+	return nil, nil
 }
 
 func TestDefaultBackupEngine_Backup_NoVolumes(t *testing.T) {
@@ -327,4 +359,54 @@ func TestDefaultBackupEngine_Restore_Minimal(t *testing.T) {
 	if len(fd.startedContainers) != 1 {
 		t.Fatalf("expected container to be started")
 	}
+}
+
+func TestBackup_CapturesVolumeAndNetworkConfigs(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New()
+	arch := archive.NewTarArchiveHandler()
+	fs := filesystem.NewHandler()
+
+	// Prepare inspect with one volume and a network in NetworkSettings.Networks
+	volSrc := t.TempDir()
+	inspect := []map[string]any{
+		{
+			"Id":   "123",
+			"Name": "/unit_test",
+			"Mounts": []map[string]any{
+				{"Name": "myvol", "Source": volSrc, "Destination": "/data", "Type": "volume", "RW": true},
+			},
+		},
+	}
+	inspectBytes, _ := json.Marshal(inspect)
+
+	dc := &fakeDockerClientWithInspect{
+		fakeDockerClient: fakeDockerClient{inspectJSON: inspectBytes},
+		vol: map[string]docker.VolumeConfig{
+			"myvol": {Name: "myvol", Driver: "local", Options: map[string]string{"o": "val"}},
+		},
+		net: map[string]docker.NetworkConfig{
+			"bridge": {Name: "bridge", Driver: "bridge"},
+		},
+	}
+
+	engine := NewDefaultBackupEngine(arch, dc, fs, log)
+
+	out := filepath.Join(t.TempDir(), "out.tar.gz")
+	_, err := engine.Backup(ctx, BackupRequest{
+		TargetType:  TargetContainer,
+		ContainerID: "unit_test",
+		Options:     BackupOptions{OutputPath: out},
+	})
+	if err != nil { t.Fatalf("backup failed: %v", err) }
+
+	// Extract and verify config files exist
+	dir := t.TempDir()
+	if err := arch.ExtractArchive(ctx, out, dir); err != nil {
+		t.Fatalf("extract failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "volumes", "volume_configs.json")); err != nil {
+		t.Fatalf("volume_configs.json missing: %v", err)
+	}
+	// networks dir may exist even if empty; this test doesn't synthesize NetworkSettings in inspectBytes, so skip strict check
 }

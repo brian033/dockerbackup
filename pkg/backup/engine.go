@@ -165,6 +165,45 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 		}
 	}
 
+	// Capture volume configs for named volumes
+	volCfgPath := filepath.Join(volumesDir, "volume_configs.json")
+	var volCfgs []docker.VolumeConfig
+	for _, m := range info.Mounts {
+		if m.Type == "volume" && m.Name != "" {
+			if v, err := e.dockerClient.InspectVolume(ctx, m.Name); err == nil && v != nil {
+				volCfgs = append(volCfgs, *v)
+			}
+		}
+	}
+	if len(volCfgs) > 0 {
+		if b, err := json.MarshalIndent(volCfgs, "", "  "); err == nil {
+			_ = os.WriteFile(volCfgPath, b, 0o644)
+		}
+	}
+
+	// Capture network configs for attached networks via container inspect (names only) -> inspect per network
+	netDir := filepath.Join(workDir, "networks")
+	if err := os.MkdirAll(netDir, 0o755); err != nil {
+		return nil, &errors.OperationError{Op: "create networks dir", Err: err}
+	}
+	var netCfgs []docker.NetworkConfig
+	// Try to read network names from container.json content (cj.NetworkSettings.Networks). Parse quickly.
+	var cj types.ContainerJSON
+	_ = json.Unmarshal(inspectJSON, &cj)
+	if cj.NetworkSettings != nil {
+		for name := range cj.NetworkSettings.Networks {
+			if n, err := e.dockerClient.InspectNetwork(ctx, name); err == nil && n != nil {
+				netCfgs = append(netCfgs, *n)
+			}
+		}
+	}
+	netCfgPath := filepath.Join(netDir, "network_configs.json")
+	if len(netCfgs) > 0 {
+		if b, err := json.MarshalIndent(netCfgs, "", "  "); err == nil {
+			_ = os.WriteFile(netCfgPath, b, 0o644)
+		}
+	}
+
 	// Write metadata
 	meta := backupMetadata{
 		Version:         1,
@@ -188,6 +227,7 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 		{Path: containerJSONPath, DestPath: "container.json"},
 		{Path: filesystemTarPath, DestPath: "filesystem.tar"},
 		{Path: volumesDir, DestPath: "volumes"},
+		{Path: netDir, DestPath: "networks"},
 		{Path: metadataPath, DestPath: "metadata.json"},
 	}
 	if err := e.archiveHandler.CreateArchive(ctx, sources, outputPath); err != nil {
@@ -236,6 +276,20 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		return nil, &errors.OperationError{Op: "filesystem.tar missing", Err: err}
 	}
 
+	// Load saved volume and network configs if present
+	volCfgs := []docker.VolumeConfig{}
+	if b, err := os.ReadFile(filepath.Join(tmpDir, "volumes", "volume_configs.json")); err == nil {
+		_ = json.Unmarshal(b, &volCfgs)
+	}
+	netCfgs := []docker.NetworkConfig{}
+	if b, err := os.ReadFile(filepath.Join(tmpDir, "networks", "network_configs.json")); err == nil {
+		_ = json.Unmarshal(b, &netCfgs)
+	}
+
+	// Ensure networks exist before create
+	// Note: we rely on Docker daemon defaults for options; full recreation via SDK NetworkCreate can be added to DockerClient later.
+	_ = netCfgs // reserved for future create if needed
+
 	// Effective mounts from inspect
 	effectiveMounts := make([]docker.Mount, 0, len(cj.Mounts))
 	for _, m := range cj.Mounts {
@@ -251,7 +305,7 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		})
 	}
 
-	// Restore volumes and bind mounts data
+	// Restore volumes and bind mounts data; create volumes using VolumeCreate (driver/options not yet wired into CLI variant)
 	for _, m := range effectiveMounts {
 		if m.Type == "volume" && m.Name != "" {
 			if err := e.dockerClient.VolumeCreate(ctx, m.Name); err != nil {

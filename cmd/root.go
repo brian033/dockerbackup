@@ -57,6 +57,12 @@ func (c *compositeClient) ExportContainerFilesystem(ctx context.Context, contain
 	return c.cli.ExportContainerFilesystem(ctx, containerID, destTarPath)
 }
 func (c *compositeClient) ListVolumes(ctx context.Context) ([]string, error) { return c.cli.ListVolumes(ctx) }
+func (c *compositeClient) InspectVolume(ctx context.Context, name string) (*docker.VolumeConfig, error) {
+	return c.cli.InspectVolume(ctx, name)
+}
+func (c *compositeClient) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
+	return c.cli.InspectNetwork(ctx, name)
+}
 func (c *compositeClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	return c.cli.ImportImage(ctx, tarPath, ref)
 }
