@@ -1,0 +1,16 @@
+# Binaries
+dockerbackup
+bin/
+build/
+dist/
+
+# OS files
+.DS_Store
+
+# Go build artifacts
+*.test
+coverage.out
+
+# IDE
+.idea/
+.vscode/
