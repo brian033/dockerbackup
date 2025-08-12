@@ -2,8 +2,13 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
-	internalerrors "github.com/brian033/dockerbackup/internal/errors"
+	"github.com/brian033/dockerbackup/internal/errors"
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/archive"
 	"github.com/brian033/dockerbackup/pkg/docker"
@@ -66,14 +71,155 @@ func NewDefaultBackupEngine(arch archive.ArchiveHandler, dc docker.DockerClient,
 	}
 }
 
+type backupMetadata struct {
+	Version        int       `json:"version"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ContainerID    string    `json:"containerID"`
+	ContainerName  string    `json:"containerName"`
+	Engine         string    `json:"engine"`
+	IncludesVolumes bool     `json:"includesVolumes"`
+}
+
 func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest) (*BackupResult, error) {
-	return nil, internalerrors.ErrNotImplemented
+	if request.TargetType != TargetContainer {
+		return nil, &errors.ValidationError{Msg: "only container backup supported in v0"}
+	}
+	if request.ContainerID == "" {
+		return nil, &errors.ValidationError{Field: "ContainerID", Msg: "required"}
+	}
+	// Inspect container
+	inspectJSON, err := e.dockerClient.InspectContainer(ctx, request.ContainerID)
+	if err != nil {
+		return nil, &errors.OperationError{Op: "inspect container", Err: err}
+	}
+	info, err := docker.ParseContainerInfo(inspectJSON)
+	if err != nil {
+		return nil, &errors.OperationError{Op: "parse container inspect", Err: err}
+	}
+
+	// Determine output path
+	outputPath := request.Options.OutputPath
+	if outputPath == "" {
+		cwd, _ := os.Getwd()
+		base := fmt.Sprintf("%s_backup.tar.gz", safeName(info.Name))
+		outputPath = filepath.Join(cwd, base)
+	}
+
+	// Prepare working dir
+	workDir, err := os.MkdirTemp("", fmt.Sprintf("dockerbackup_%s_*", safeName(info.Name)))
+	if err != nil {
+		return nil, &errors.OperationError{Op: "create temp dir", Err: err}
+	}
+	defer func() {
+		_ = os.RemoveAll(workDir)
+	}()
+
+	containerJSONPath := filepath.Join(workDir, "container.json")
+	filesystemTarPath := filepath.Join(workDir, "filesystem.tar")
+	volumesDir := filepath.Join(workDir, "volumes")
+	metadataPath := filepath.Join(workDir, "metadata.json")
+
+	if err := os.WriteFile(containerJSONPath, inspectJSON, 0o644); err != nil {
+		return nil, &errors.OperationError{Op: "write container.json", Err: err}
+	}
+	e.log.Infof("Exporting filesystem for container %s", info.Name)
+	if err := e.dockerClient.ExportContainerFilesystem(ctx, info.ID, filesystemTarPath); err != nil {
+		return nil, &errors.OperationError{Op: "export container filesystem", Err: err}
+	}
+
+	// Archive named volumes
+	includesVolumes := false
+	if err := os.MkdirAll(volumesDir, 0o755); err != nil {
+		return nil, &errors.OperationError{Op: "create volumes dir", Err: err}
+	}
+	for _, m := range info.Mounts {
+		if m.Type == "volume" && m.Name != "" && m.Source != "" {
+			includesVolumes = true
+			volTarGz := filepath.Join(volumesDir, fmt.Sprintf("%s.tar.gz", safeName(m.Name)))
+			// Create archive for the volume source directory
+			src := archive.ArchiveSource{Path: m.Source, DestPath: m.Name}
+			if err := e.archiveHandler.CreateArchive(ctx, []archive.ArchiveSource{src}, volTarGz); err != nil {
+				return nil, &errors.OperationError{Op: fmt.Sprintf("archive volume %s", m.Name), Err: err}
+			}
+		}
+	}
+
+	// Write metadata
+	meta := backupMetadata{
+		Version:         1,
+		CreatedAt:       time.Now().UTC(),
+		ContainerID:     info.ID,
+		ContainerName:   info.Name,
+		Engine:          "default",
+		IncludesVolumes: includesVolumes,
+	}
+	b, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return nil, &errors.OperationError{Op: "marshal metadata", Err: err}
+	}
+	if err := os.WriteFile(metadataPath, b, 0o644); err != nil {
+		return nil, &errors.OperationError{Op: "write metadata.json", Err: err}
+	}
+
+	// Build final archive
+	e.log.Infof("Packaging backup -> %s", outputPath)
+	sources := []archive.ArchiveSource{
+		{Path: containerJSONPath, DestPath: "container.json"},
+		{Path: filesystemTarPath, DestPath: "filesystem.tar"},
+		{Path: volumesDir, DestPath: "volumes"},
+		{Path: metadataPath, DestPath: "metadata.json"},
+	}
+	if err := e.archiveHandler.CreateArchive(ctx, sources, outputPath); err != nil {
+		return nil, &errors.OperationError{Op: "create final archive", Err: err}
+	}
+
+	return &BackupResult{OutputPath: outputPath}, nil
 }
 
 func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreRequest) (*RestoreResult, error) {
-	return nil, internalerrors.ErrNotImplemented
+	return nil, errors.ErrNotImplemented
 }
 
 func (e *DefaultBackupEngine) Validate(ctx context.Context, backupPath string) (*ValidationResult, error) {
-	return nil, internalerrors.ErrNotImplemented
+	return nil, errors.ErrNotImplemented
+}
+
+func safeName(name string) string {
+	if name == "" {
+		return "container"
+	}
+	// Replace path separators and spaces
+	s := name
+	replacer := []struct{ old, new string }{
+		{"/", "-"}, {"\\", "-"}, {" ", "-"}, {":", "-"}, {"\t", "-"},
+	}
+	for _, r := range replacer {
+		s = stringReplaceAll(s, r.old, r.new)
+	}
+	return s
+}
+
+func stringReplaceAll(s, old, new string) string {
+	for {
+		idx := indexOf(s, old)
+		if idx < 0 {
+			return s
+		}
+		s = s[:idx] + new + s[idx+len(old):]
+	}
+}
+
+func indexOf(s, sub string) int {
+	// naive search; avoids importing strings to keep imports compact here
+	n := len(s)
+	m := len(sub)
+	if m == 0 {
+		return 0
+	}
+	for i := 0; i+m <= n; i++ {
+		if s[i:i+m] == sub {
+			return i
+		}
+	}
+	return -1
 }

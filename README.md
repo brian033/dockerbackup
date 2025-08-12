@@ -38,6 +38,7 @@ dockerbackup backup a1b2c3d4e5f6
 ```
 
 #### Backup Options
+
 - `--output, -o`: Specify output file path (default: `<container_name>_backup.tar.gz`)
 - `--compress, -c`: Compression level (1-9, default: 6)
 
@@ -52,6 +53,7 @@ dockerbackup restore my-app_backup.tar.gz
 ```
 
 #### Restore Options
+
 - `--name, -n`: Specify new container name (default: original container name)
 - `--start`: Start container immediately after restore
 
@@ -67,6 +69,7 @@ dockerbackup backup-compose /path/to/project    # Backup specific project
 ```
 
 #### Compose Backup Options
+
 - `--output, -o`: Specify output file path (default: `<project_name>_compose_backup.tar.gz`)
 - `--project-name, -p`: Override project name detection
 
@@ -81,6 +84,7 @@ dockerbackup restore-compose my-project_compose_backup.tar.gz
 ```
 
 #### Compose Restore Options
+
 - `--project-name, -p`: Specify new project name (default: original project name)
 - `--start`: Start all services immediately after restore
 
@@ -129,6 +133,7 @@ dockerbackup list <backup_file>
 ## Backup File Structure
 
 ### Single Container Backup
+
 ```
 container_backup.tar.gz
 ├── container.json          # Complete container configuration
@@ -140,6 +145,7 @@ container_backup.tar.gz
 ```
 
 ### Compose Project Backup
+
 ```
 project_compose_backup.tar.gz
 ├── compose-files/          # Project configuration files
