@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/your-username/dockerbackup/internal/logger"
-	"github.com/your-username/dockerbackup/pkg/archive"
-	"github.com/your-username/dockerbackup/pkg/backup"
-	"github.com/your-username/dockerbackup/pkg/docker"
-	"github.com/your-username/dockerbackup/pkg/filesystem"
+	"github.com/brian033/dockerbackup/internal/logger"
+	"github.com/brian033/dockerbackup/pkg/archive"
+	"github.com/brian033/dockerbackup/pkg/backup"
+	"github.com/brian033/dockerbackup/pkg/docker"
+	"github.com/brian033/dockerbackup/pkg/filesystem"
 )
 
 type Command interface {

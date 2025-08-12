@@ -13,13 +13,13 @@ A CLI tool written in Go that can backup running Docker containers and restore t
 ## Installation
 
 ```bash
-go install github.com/your-username/dockerbackup@latest
+go install github.com/brian033/dockerbackup@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/your-username/dockerbackup
+git clone https://github.com/brian033/dockerbackup
 cd dockerbackup
 go build -o dockerbackup
 ```

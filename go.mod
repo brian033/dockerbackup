@@ -1,3 +1,3 @@
-module github.com/your-username/dockerbackup
+module github.com/brian033/dockerbackup
 
 go 1.20

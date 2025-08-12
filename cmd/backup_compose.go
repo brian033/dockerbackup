@@ -4,8 +4,8 @@ import (
 	"context"
 	"flag"
 
-	"github.com/your-username/dockerbackup/internal/logger"
-	"github.com/your-username/dockerbackup/pkg/backup"
+	"github.com/brian033/dockerbackup/internal/logger"
+	"github.com/brian033/dockerbackup/pkg/backup"
 )
 
 type BackupComposeCmd struct {

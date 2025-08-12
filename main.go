@@ -1,6 +1,6 @@
 package main
 
-import "github.com/your-username/dockerbackup/cmd"
+import "github.com/brian033/dockerbackup/cmd"
 
 func main() {
 	cmd.Execute()

@@ -3,11 +3,11 @@ package backup
 import (
 	"context"
 
-	internalerrors "github.com/your-username/dockerbackup/internal/errors"
-	"github.com/your-username/dockerbackup/internal/logger"
-	"github.com/your-username/dockerbackup/pkg/archive"
-	"github.com/your-username/dockerbackup/pkg/docker"
-	"github.com/your-username/dockerbackup/pkg/filesystem"
+	internalerrors "github.com/brian033/dockerbackup/internal/errors"
+	"github.com/brian033/dockerbackup/internal/logger"
+	"github.com/brian033/dockerbackup/pkg/archive"
+	"github.com/brian033/dockerbackup/pkg/docker"
+	"github.com/brian033/dockerbackup/pkg/filesystem"
 )
 
 type BackupTargetType string

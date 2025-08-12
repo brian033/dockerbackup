@@ -5,8 +5,8 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/your-username/dockerbackup/internal/logger"
-	"github.com/your-username/dockerbackup/pkg/archive"
+	"github.com/brian033/dockerbackup/internal/logger"
+	"github.com/brian033/dockerbackup/pkg/archive"
 )
 
 type ListCmd struct {
