@@ -35,7 +35,9 @@ func (c *DryRunRestoreCmd) Execute(ctx context.Context, args []string) error {
 	backupFile := args[0]
 	h := archive.NewTarArchiveHandler()
 	entries, err := h.ListArchive(ctx, backupFile)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	fmt.Println("Plan:")
 	fmt.Println("- Extract backup to temp dir")
 	fmt.Println("- Load image.tar if present; else import filesystem.tar")
@@ -43,12 +45,26 @@ func (c *DryRunRestoreCmd) Execute(ctx context.Context, args []string) error {
 	fmt.Println("- Recreate container with mounts, ports, env, and networking")
 
 	has := map[string]bool{}
-	for _, e := range entries { has[e.Path] = true }
-	if has["volumes/volume_configs.json"] { fmt.Println("  * volume configs found: volumes/volume_configs.json") }
-	if has["networks/network_configs.json"] { fmt.Println("  * network configs found: networks/network_configs.json") }
-	if has["image.tar"] { fmt.Println("  * image tar found: image.tar") }
-	if has["container.json"] { fmt.Println("  * container inspect found: container.json") }
-	for _, e := range entries { if len(e.Path) > 8 && e.Path[:8] == "volumes/" && filepath.Ext(e.Path) == ".gz" { fmt.Printf("  * volume archive: %s\n", e.Path) } }
+	for _, e := range entries {
+		has[e.Path] = true
+	}
+	if has["volumes/volume_configs.json"] {
+		fmt.Println("  * volume configs found: volumes/volume_configs.json")
+	}
+	if has["networks/network_configs.json"] {
+		fmt.Println("  * network configs found: networks/network_configs.json")
+	}
+	if has["image.tar"] {
+		fmt.Println("  * image tar found: image.tar")
+	}
+	if has["container.json"] {
+		fmt.Println("  * container inspect found: container.json")
+	}
+	for _, e := range entries {
+		if len(e.Path) > 8 && e.Path[:8] == "volumes/" && filepath.Ext(e.Path) == ".gz" {
+			fmt.Printf("  * volume archive: %s\n", e.Path)
+		}
+	}
 
 	// Show brief diff-like info by extracting minimal JSON fields if present in list
 	// Note: full diff requires extraction; here we hint based on presence

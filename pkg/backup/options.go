@@ -8,28 +8,30 @@ type BackupOptions struct {
 }
 
 type RestoreOptions struct {
-	ContainerName string
-	Start         bool
+	ContainerName      string
+	Start              bool
 	// Portability and mapping
-	NetworkMap     map[string]string
-	ParentMap      map[string]string
-	DropHostIPs    bool
-	ReassignIPs    bool
-	FallbackBridge bool
+	NetworkMap         map[string]string
+	ParentMap          map[string]string
+	DropHostIPs        bool
+	ReassignIPs        bool
+	FallbackBridge     bool
 	// Health / readiness
 	WaitHealthy        bool
 	WaitTimeoutSeconds int
 	// Replacement and binds
-	ReplaceExisting bool
-	BindRestoreRoot string
+	ReplaceExisting    bool
+	BindRestoreRoot    string
 	// Ports binding preference
-	ForceBindIP   string
-	BindInterface string
+	ForceBindIP        string
+	BindInterface      string
 	// Safe-mode drops
-	DropDevices  bool
-	DropCaps     bool
-	DropSeccomp  bool
-	DropAppArmor bool
+	DropDevices        bool
+	DropCaps           bool
+	DropSeccomp        bool
+	DropAppArmor       bool
+	// IP conflicts handling
+	AutoRelaxIPs       bool
 }
 
 type BackupOptionsBuilder struct {

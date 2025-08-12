@@ -57,6 +57,7 @@ func (c *RestoreCmd) Execute(ctx context.Context, args []string) error {
 	var dropCaps bool
 	var dropSeccomp bool
 	var dropAppArmor bool
+	var autoRelaxIPs bool
 	fs.StringVarP(&name, "name", "n", "", "New container name")
 	fs.BoolVar(&start, "start", false, "Start container after restore")
 	fs.StringArrayVar(&netMaps, "network-map", nil, "Map networks old:new (repeatable)")
@@ -74,6 +75,7 @@ func (c *RestoreCmd) Execute(ctx context.Context, args []string) error {
 	fs.BoolVar(&dropCaps, "drop-caps", false, "Drop HostConfig.CapAdd/CapDrop on restore (safe mode)")
 	fs.BoolVar(&dropSeccomp, "drop-seccomp", false, "Drop HostConfig.SecurityOpt seccomp profile (safe mode)")
 	fs.BoolVar(&dropAppArmor, "drop-apparmor", false, "Drop HostConfig.SecurityOpt apparmor profile (safe mode)")
+	fs.BoolVar(&autoRelaxIPs, "auto-relax-ips", false, "If container has static IPs conflicting with host networks, drop IPAM to let Docker assign")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -114,6 +116,7 @@ func (c *RestoreCmd) Execute(ctx context.Context, args []string) error {
 			DropCaps:           dropCaps,
 			DropSeccomp:        dropSeccomp,
 			DropAppArmor:       dropAppArmor,
+			AutoRelaxIPs:      autoRelaxIPs,
 		},
 		TargetType: backup.TargetContainer,
 	}

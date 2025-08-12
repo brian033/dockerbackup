@@ -664,10 +664,16 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 
 	// NetworkingConfig from NetworkSettings.Networks, optionally clearing static IPs
 	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{}}
+	conflictingStaticIP := false
 	if cj.NetworkSettings != nil && cj.NetworkSettings.Networks != nil {
 		for name, ns := range cj.NetworkSettings.Networks {
 			ep := &network.EndpointSettings{Aliases: ns.Aliases}
-			if request.Options.ReassignIPs {
+			ipam := ns.IPAMConfig
+			// simple conflict check: if IPAMConfig has IPv4 address and subnet overlaps with an existing interface network, mark conflict
+			if ipam != nil && ipam.IPv4Address != "" {
+				if conflictWithHostIPv4(ipam.IPv4Address) { conflictingStaticIP = true }
+			}
+			if request.Options.ReassignIPs || (request.Options.AutoRelaxIPs && conflictingStaticIP) {
 				ep.IPAMConfig = nil
 			} else {
 				ep.IPAMConfig = ns.IPAMConfig
@@ -964,4 +970,19 @@ func primaryIPv4OfInterface(ifName string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no IPv4 on interface %s", ifName)
+}
+
+func conflictWithHostIPv4(addr string) bool {
+	ip := net.ParseIP(addr).To4()
+	if ip == nil { return false }
+	ifs, _ := net.Interfaces()
+	for _, it := range ifs {
+		addrs, _ := it.Addrs()
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok {
+				if ipn.IP.To4() != nil && ipn.Contains(ip) { return true }
+			}
+		}
+	}
+	return false
 }

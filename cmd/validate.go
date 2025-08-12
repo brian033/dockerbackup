@@ -23,7 +23,9 @@ Usage:
 }
 
 func (c *ValidateCmd) Validate(args []string) error {
-	if len(args) == 0 { return fmt.Errorf("missing backup file path") }
+	if len(args) == 0 {
+		return fmt.Errorf("missing backup file path")
+	}
 	return nil
 }
 
@@ -31,8 +33,12 @@ func (c *ValidateCmd) Execute(ctx context.Context, args []string) error {
 	backupFile := args[0]
 	eng := newDefaultEngine(c.log)
 	res, err := eng.Validate(ctx, backupFile)
-	if err != nil { return err }
-	if res == nil { return fmt.Errorf("no validation result") }
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		return fmt.Errorf("no validation result")
+	}
 	if res.Valid {
 		fmt.Println("VALID:", res.Details)
 	} else {
