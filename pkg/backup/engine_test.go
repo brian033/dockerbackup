@@ -46,8 +46,12 @@ func (f *fakeDockerClient) InspectVolume(ctx context.Context, name string) (*doc
 func (f *fakeDockerClient) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
 	return nil, nil
 }
-func (f *fakeDockerClient) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error { return nil }
-func (f *fakeDockerClient) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error { return nil }
+func (f *fakeDockerClient) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error {
+	return nil
+}
+func (f *fakeDockerClient) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error {
+	return nil
+}
 func (f *fakeDockerClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	return "image123", nil
 }
@@ -62,6 +66,16 @@ func (f *fakeDockerClient) CreateContainerFromSpec(ctx context.Context, cfg *con
 	return "container123", nil
 }
 func (f *fakeDockerClient) StartContainer(ctx context.Context, containerID string) error { return nil }
+func (f *fakeDockerClient) ImageSave(ctx context.Context, imageRef string, destTarPath string) error {
+	return nil
+}
+func (f *fakeDockerClient) ImageLoad(ctx context.Context, tarPath string) error { return nil }
+
+// Add stubs for new interface methods
+func (f *fakeDockerClient) ContainerState(ctx context.Context, containerID string) (string, string, error) {
+	return "running", "healthy", nil
+}
+func (f *fakeDockerClient) HostIPs(ctx context.Context) ([]string, error) { return []string{"127.0.0.1", "0.0.0.0"}, nil }
 
 type fakeDockerClientRestore struct {
 	createdImageRef   string
@@ -84,8 +98,12 @@ func (f *fakeDockerClientRestore) InspectVolume(ctx context.Context, name string
 func (f *fakeDockerClientRestore) InspectNetwork(ctx context.Context, name string) (*docker.NetworkConfig, error) {
 	return nil, nil
 }
-func (f *fakeDockerClientRestore) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error { return nil }
-func (f *fakeDockerClientRestore) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error { return nil }
+func (f *fakeDockerClientRestore) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error {
+	return nil
+}
+func (f *fakeDockerClientRestore) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error {
+	return nil
+}
 func (f *fakeDockerClientRestore) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
 	f.createdImageRef = "imported:" + filepath.Base(tarPath)
 	return f.createdImageRef, nil
@@ -110,6 +128,16 @@ func (f *fakeDockerClientRestore) StartContainer(ctx context.Context, containerI
 	f.startedContainers = append(f.startedContainers, containerID)
 	return nil
 }
+func (f *fakeDockerClientRestore) ImageSave(ctx context.Context, imageRef string, destTarPath string) error {
+	return nil
+}
+func (f *fakeDockerClientRestore) ImageLoad(ctx context.Context, tarPath string) error { return nil }
+
+// Add stubs for new interface methods
+func (f *fakeDockerClientRestore) ContainerState(ctx context.Context, containerID string) (string, string, error) {
+	return "running", "healthy", nil
+}
+func (f *fakeDockerClientRestore) HostIPs(ctx context.Context) ([]string, error) { return []string{"127.0.0.1", "0.0.0.0"}, nil }
 
 type fakeDockerClientWithInspect struct {
 	fakeDockerClient

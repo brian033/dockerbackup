@@ -19,7 +19,6 @@ import (
 	"github.com/brian033/dockerbackup/pkg/filesystem"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	dockermount "github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 )
 
@@ -126,6 +125,7 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 	filesystemTarPath := filepath.Join(workDir, "filesystem.tar")
 	volumesDir := filepath.Join(workDir, "volumes")
 	metadataPath := filepath.Join(workDir, "metadata.json")
+	imageTarPath := filepath.Join(workDir, "image.tar")
 
 	if err := os.WriteFile(containerJSONPath, inspectJSON, 0o644); err != nil {
 		return nil, &errors.OperationError{Op: "write container.json", Err: err}
@@ -221,6 +221,11 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 		return nil, &errors.OperationError{Op: "write metadata.json", Err: err}
 	}
 
+	// Try to save original image if present in inspect (non-empty Image ID or name)
+	if cj.ContainerJSONBase != nil && cj.ContainerJSONBase.Image != "" {
+		_ = e.dockerClient.ImageSave(ctx, cj.ContainerJSONBase.Image, imageTarPath)
+	}
+
 	// Build final archive
 	e.log.Infof("Packaging backup -> %s", outputPath)
 	sources := []archive.ArchiveSource{
@@ -229,6 +234,9 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 		{Path: volumesDir, DestPath: "volumes"},
 		{Path: netDir, DestPath: "networks"},
 		{Path: metadataPath, DestPath: "metadata.json"},
+	}
+	if _, err := os.Stat(imageTarPath); err == nil {
+		sources = append(sources, archive.ArchiveSource{Path: imageTarPath, DestPath: "image.tar"})
 	}
 	if err := e.archiveHandler.CreateArchive(ctx, sources, outputPath); err != nil {
 		return nil, &errors.OperationError{Op: "create final archive", Err: err}
@@ -263,17 +271,26 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		cj = arr[0]
 	}
 
-	// Import filesystem to new image
-	fsTarPath := filepath.Join(tmpDir, "filesystem.tar")
+	// Prefer image load if image.tar exists; else import filesystem.tar
+	imageTar := filepath.Join(tmpDir, "image.tar")
 	imageRef := ""
-	if _, err := os.Stat(fsTarPath); err == nil {
-		imgID, err := e.dockerClient.ImportImage(ctx, fsTarPath, "")
-		if err != nil {
-			return nil, &errors.OperationError{Op: "docker import image", Err: err}
+	if _, err := os.Stat(imageTar); err == nil {
+		if err := e.dockerClient.ImageLoad(ctx, imageTar); err == nil {
+			// Use original image reference if available; else keep empty and rely on cfg.Image overwritten later
+			imageRef = cj.ContainerJSONBase.Image
 		}
-		imageRef = imgID
-	} else {
-		return nil, &errors.OperationError{Op: "filesystem.tar missing", Err: err}
+	}
+	if imageRef == "" {
+		fsTarPath := filepath.Join(tmpDir, "filesystem.tar")
+		if _, err := os.Stat(fsTarPath); err == nil {
+			imgID, err := e.dockerClient.ImportImage(ctx, fsTarPath, "")
+			if err != nil {
+				return nil, &errors.OperationError{Op: "docker import image", Err: err}
+			}
+			imageRef = imgID
+		} else {
+			return nil, &errors.OperationError{Op: "filesystem.tar missing", Err: err}
+		}
 	}
 
 	// Load saved volume and network configs if present
@@ -286,8 +303,37 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		_ = json.Unmarshal(b, &netCfgs)
 	}
 
-	// Ensure networks exist
+	// Apply network name mapping to cj.NetworkSettings before creating netCfg
+	if cj.NetworkSettings != nil && cj.NetworkSettings.Networks != nil && len(request.Options.NetworkMap) > 0 {
+		mapped := map[string]*network.EndpointSettings{}
+		for name, ns := range cj.NetworkSettings.Networks {
+			newName := name
+			if m, ok := request.Options.NetworkMap[name]; ok && m != "" {
+				newName = m
+			}
+			mapped[newName] = ns
+		}
+		cj.NetworkSettings.Networks = mapped
+	}
+
+	// Ensure networks exist with potential parent overrides/fallbacks (macvlan/ipvlan)
 	for _, nc := range netCfgs {
+		if newName, ok := request.Options.NetworkMap[nc.Name]; ok && newName != "" {
+			nc.Name = newName
+		}
+		if parent, ok := request.Options.ParentMap[nc.Name]; ok && parent != "" {
+			if nc.Options == nil {
+				nc.Options = map[string]string{}
+			}
+			nc.Options["parent"] = parent
+		}
+		// If still macvlan/ipvlan and no parent present and fallbackBridge is set, convert to bridge
+		if request.Options.FallbackBridge {
+			if (nc.Driver == "macvlan" || nc.Driver == "ipvlan") && (nc.Options == nil || nc.Options["parent"] == "") {
+				nc.Driver = "bridge"
+				delete(nc.Options, "parent")
+			}
+		}
 		_ = e.dockerClient.EnsureNetwork(ctx, nc)
 	}
 
@@ -348,38 +394,42 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 	if hostCfg == nil {
 		hostCfg = &container.HostConfig{}
 	}
-	// Ensure the image points to the imported one
 	cfg.Image = imageRef
 
-	// If HostConfig.Mounts empty, translate from effective mounts
-	if len(hostCfg.Mounts) == 0 && len(effectiveMounts) > 0 {
-		for _, m := range effectiveMounts {
-			mt := dockermount.TypeBind
-			if m.Type == "volume" {
-				mt = dockermount.TypeVolume
+	// Validate HostIp presence: remove bindings with missing HostIp unless DropHostIPs set, else keep
+	if hostCfg.PortBindings != nil {
+		hostIPs, _ := e.dockerClient.HostIPs(ctx)
+		present := map[string]struct{}{}
+		for _, ip := range hostIPs { present[ip] = struct{}{} }
+		for port, bindings := range hostCfg.PortBindings {
+			filtered := bindings[:0]
+			for _, b := range bindings {
+				if b.HostIP == "" || request.Options.DropHostIPs {
+					b.HostIP = ""
+					filtered = append(filtered, b)
+					continue
+				}
+				if _, ok := present[b.HostIP]; ok {
+					filtered = append(filtered, b)
+				} else {
+					e.log.Infof("Port binding HostIp %s not present; skipping binding for %s", b.HostIP, port)
+				}
 			}
-			ro := !m.RW
-			source := m.Source
-			if m.Type == "volume" && m.Name != "" {
-				source = m.Name
-			}
-			hostCfg.Mounts = append(hostCfg.Mounts, dockermount.Mount{
-				Type:     mt,
-				Source:   source,
-				Target:   m.Destination,
-				ReadOnly: ro,
-			})
+			hostCfg.PortBindings[port] = filtered
 		}
 	}
 
-	// NetworkingConfig from NetworkSettings.Networks
+	// NetworkingConfig from NetworkSettings.Networks, optionally clearing static IPs
 	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{}}
 	if cj.NetworkSettings != nil && cj.NetworkSettings.Networks != nil {
 		for name, ns := range cj.NetworkSettings.Networks {
-			netCfg.EndpointsConfig[name] = &network.EndpointSettings{
-				Aliases:    ns.Aliases,
-				IPAMConfig: ns.IPAMConfig,
+			ep := &network.EndpointSettings{Aliases: ns.Aliases}
+			if request.Options.ReassignIPs {
+				ep.IPAMConfig = nil
+			} else {
+				ep.IPAMConfig = ns.IPAMConfig
 			}
+			netCfg.EndpointsConfig[name] = ep
 		}
 	}
 
@@ -398,7 +448,6 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 		return nil, &errors.OperationError{Op: "container create from spec", Err: err}
 	}
 	if err != nil {
-		// Fallback to CLI create using minimal info
 		var mounts []docker.Mount
 		for _, m := range effectiveMounts {
 			mounts = append(mounts, docker.Mount{Name: m.Name, Source: m.Source, Destination: m.Destination, Type: m.Type, RW: m.RW})
@@ -412,6 +461,24 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 	if request.Options.Start {
 		if err := e.dockerClient.StartContainer(ctx, containerID); err != nil {
 			return nil, &errors.OperationError{Op: "docker start", Err: err}
+		}
+		if request.Options.WaitHealthy {
+			timeout := time.Duration(request.Options.WaitTimeoutSeconds) * time.Second
+			if timeout <= 0 { timeout = 2 * time.Minute }
+			deadline := time.Now().Add(timeout)
+			for {
+				if time.Now().After(deadline) {
+					return &RestoreResult{RestoredID: containerID}, nil
+				}
+				status, health, _ := e.dockerClient.ContainerState(ctx, containerID)
+				if status == "exited" || status == "dead" || status == "removing" {
+					return &RestoreResult{RestoredID: containerID}, nil
+				}
+				if health == "healthy" {
+					break
+				}
+				time.Sleep(2 * time.Second)
+			}
 		}
 	}
 	return &RestoreResult{RestoredID: containerID}, nil

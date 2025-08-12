@@ -8,8 +8,17 @@ type BackupOptions struct {
 }
 
 type RestoreOptions struct {
-	ContainerName string
-	Start         bool
+	ContainerName      string
+	Start              bool
+	// Portability and mapping
+	NetworkMap         map[string]string
+	ParentMap          map[string]string
+	DropHostIPs        bool
+	ReassignIPs        bool
+	FallbackBridge     bool
+	// Health / readiness
+	WaitHealthy        bool
+	WaitTimeoutSeconds int
 }
 
 type BackupOptionsBuilder struct {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,10 @@ type DockerClient interface {
 	InspectVolume(ctx context.Context, name string) (*VolumeConfig, error)
 	InspectNetwork(ctx context.Context, name string) (*NetworkConfig, error)
 
+	// Image fidelity
+	ImageSave(ctx context.Context, imageRef string, destTarPath string) error
+	ImageLoad(ctx context.Context, tarPath string) error
+
 	// Ensure resources exist with original options (SDK preferred)
 	EnsureVolume(ctx context.Context, cfg VolumeConfig) error
 	EnsureNetwork(ctx context.Context, cfg NetworkConfig) error
@@ -38,6 +43,8 @@ type DockerClient interface {
 	CreateContainer(ctx context.Context, imageRef string, name string, mounts []Mount) (string, error)
 	CreateContainerFromSpec(ctx context.Context, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig, name string) (string, error)
 	StartContainer(ctx context.Context, containerID string) error
+	HostIPs(ctx context.Context) ([]string, error)
+	ContainerState(ctx context.Context, containerID string) (status string, healthStatus string, err error)
 }
 
 type CLIClient struct{}
@@ -270,4 +277,67 @@ func (c *CLIClient) EnsureVolume(ctx context.Context, cfg VolumeConfig) error {
 
 func (c *CLIClient) EnsureNetwork(ctx context.Context, cfg NetworkConfig) error {
 	return internalerrors.ErrNotImplemented
+}
+
+func (c *CLIClient) ImageSave(ctx context.Context, imageRef string, destTarPath string) error {
+	if err := os.MkdirAll(filepath.Dir(destTarPath), 0o755); err != nil {
+		return err
+	}
+	f, err := os.Create(destTarPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	cmd := exec.CommandContext(ctx, "docker", "save", imageRef)
+	cmd.Stdout = f
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker save %s failed: %v: %s", imageRef, err, stderr.String())
+	}
+	return nil
+}
+
+func (c *CLIClient) ImageLoad(ctx context.Context, tarPath string) error {
+	cmd := exec.CommandContext(ctx, "docker", "load", "-i", tarPath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker load failed: %v: %s", err, stderr.String())
+	}
+	return nil
+}
+
+func (c *CLIClient) HostIPs(ctx context.Context) ([]string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil { return nil, err }
+	ips := []string{}
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsLoopback() { continue }
+		ip = ip.To4()
+		if ip == nil { continue }
+		ips = append(ips, ip.String())
+	}
+	return ips, nil
+}
+
+func (c *CLIClient) ContainerState(ctx context.Context, containerID string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "inspect", containerID, "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", "", fmt.Errorf("docker inspect state %s failed: %v: %s", containerID, err, stderr.String())
+	}
+	parts := strings.Fields(strings.TrimSpace(stdout.String()))
+	if len(parts) == 0 { return "", "", nil }
+	if len(parts) == 1 { return parts[0], "", nil }
+	return parts[0], parts[1], nil
 }

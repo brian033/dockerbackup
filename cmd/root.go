@@ -83,8 +83,22 @@ func (c *compositeClient) CreateContainerFromSpec(ctx context.Context, cfg *cont
 func (c *compositeClient) StartContainer(ctx context.Context, containerID string) error {
 	return c.cli.StartContainer(ctx, containerID)
 }
-func (c *compositeClient) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error { return c.sdk.EnsureVolume(ctx, cfg) }
-func (c *compositeClient) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error { return c.sdk.EnsureNetwork(ctx, cfg) }
+func (c *compositeClient) EnsureVolume(ctx context.Context, cfg docker.VolumeConfig) error {
+	return c.sdk.EnsureVolume(ctx, cfg)
+}
+func (c *compositeClient) EnsureNetwork(ctx context.Context, cfg docker.NetworkConfig) error {
+	return c.sdk.EnsureNetwork(ctx, cfg)
+}
+func (c *compositeClient) ImageSave(ctx context.Context, imageRef string, destTarPath string) error {
+	return c.cli.ImageSave(ctx, imageRef, destTarPath)
+}
+func (c *compositeClient) ImageLoad(ctx context.Context, tarPath string) error {
+	return c.cli.ImageLoad(ctx, tarPath)
+}
+func (c *compositeClient) HostIPs(ctx context.Context) ([]string, error) { return c.cli.HostIPs(ctx) }
+func (c *compositeClient) ContainerState(ctx context.Context, containerID string) (string, string, error) {
+	return c.cli.ContainerState(ctx, containerID)
+}
 
 func Execute() {
 	log := logger.New()
