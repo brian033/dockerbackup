@@ -10,6 +10,7 @@ import (
 
 	"github.com/brian033/dockerbackup/internal/logger"
 	"github.com/brian033/dockerbackup/pkg/archive"
+	"github.com/brian033/dockerbackup/pkg/docker"
 	"github.com/brian033/dockerbackup/pkg/filesystem"
 )
 
@@ -36,6 +37,55 @@ func (f *fakeDockerClient) ExportContainerFilesystem(ctx context.Context, contai
 }
 
 func (f *fakeDockerClient) ListVolumes(ctx context.Context) ([]string, error) { return nil, nil }
+
+// New methods to satisfy interface (unused in backup tests)
+func (f *fakeDockerClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
+	return "image123", nil
+}
+func (f *fakeDockerClient) VolumeCreate(ctx context.Context, name string) error { return nil }
+func (f *fakeDockerClient) ExtractTarGzToVolume(ctx context.Context, volumeName string, tarGzPath string, expectedRoot string) error {
+	return nil
+}
+func (f *fakeDockerClient) CreateContainer(ctx context.Context, imageRef string, name string, mounts []docker.Mount) (string, error) {
+	return "container123", nil
+}
+func (f *fakeDockerClient) StartContainer(ctx context.Context, containerID string) error { return nil }
+
+type fakeDockerClientRestore struct {
+	createdImageRef   string
+	createdVolumes    []string
+	extractedVolumes  []string
+	createdContainer  string
+	startedContainers []string
+}
+
+func (f *fakeDockerClientRestore) InspectContainer(ctx context.Context, containerID string) ([]byte, error) {
+	return nil, nil
+}
+func (f *fakeDockerClientRestore) ExportContainerFilesystem(ctx context.Context, containerID string, destTarPath string) error {
+	return nil
+}
+func (f *fakeDockerClientRestore) ListVolumes(ctx context.Context) ([]string, error) { return nil, nil }
+func (f *fakeDockerClientRestore) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
+	f.createdImageRef = "imported:" + filepath.Base(tarPath)
+	return f.createdImageRef, nil
+}
+func (f *fakeDockerClientRestore) VolumeCreate(ctx context.Context, name string) error {
+	f.createdVolumes = append(f.createdVolumes, name)
+	return nil
+}
+func (f *fakeDockerClientRestore) ExtractTarGzToVolume(ctx context.Context, volumeName string, tarGzPath string, expectedRoot string) error {
+	f.extractedVolumes = append(f.extractedVolumes, volumeName)
+	return nil
+}
+func (f *fakeDockerClientRestore) CreateContainer(ctx context.Context, imageRef string, name string, mounts []docker.Mount) (string, error) {
+	f.createdContainer = name
+	return "container123", nil
+}
+func (f *fakeDockerClientRestore) StartContainer(ctx context.Context, containerID string) error {
+	f.startedContainers = append(f.startedContainers, containerID)
+	return nil
+}
 
 func TestDefaultBackupEngine_Backup_NoVolumes(t *testing.T) {
 	ctx := context.Background()
@@ -226,5 +276,45 @@ func TestDefaultBackupEngine_Validate(t *testing.T) {
 	}
 	if res2 == nil || res2.Valid {
 		t.Fatalf("expected invalid validation result")
+	}
+}
+
+func TestDefaultBackupEngine_Restore_Minimal(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New()
+	arch := archive.NewTarArchiveHandler()
+	fs := filesystem.NewHandler()
+	fd := &fakeDockerClientRestore{}
+	engine := NewDefaultBackupEngine(arch, fd, fs, log)
+
+	// Create a minimal valid backup archive
+	work := t.TempDir()
+	// container.json with no mounts
+	inspect := []map[string]any{{"Id": "123", "Name": "/unit_test", "Mounts": []map[string]any{}}}
+	b, _ := json.Marshal(inspect)
+	if err := os.WriteFile(filepath.Join(work, "container.json"), b, 0o644); err != nil {
+		t.Fatalf("write container.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "metadata.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write metadata.json: %v", err)
+	}
+	// fake filesystem.tar
+	if err := os.WriteFile(filepath.Join(work, "filesystem.tar"), []byte("tar"), 0o644); err != nil {
+		t.Fatalf("write filesystem.tar: %v", err)
+	}
+	backupFile := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := arch.CreateArchive(ctx, []archive.ArchiveSource{{Path: work, DestPath: "."}}, backupFile); err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+
+	res, err := engine.Restore(ctx, RestoreRequest{BackupPath: backupFile, Options: RestoreOptions{Start: true}})
+	if err != nil {
+		t.Fatalf("restore failed: %v", err)
+	}
+	if res == nil || res.RestoredID == "" {
+		t.Fatalf("unexpected restore result: %+v", res)
+	}
+	if len(fd.startedContainers) != 1 {
+		t.Fatalf("expected container to be started")
 	}
 }

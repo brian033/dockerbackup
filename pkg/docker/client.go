@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -16,6 +17,13 @@ type DockerClient interface {
 	InspectContainer(ctx context.Context, containerID string) ([]byte, error)
 	ExportContainerFilesystem(ctx context.Context, containerID string, destTarPath string) error
 	ListVolumes(ctx context.Context) ([]string, error)
+
+	// Restore-related
+	ImportImage(ctx context.Context, tarPath string, ref string) (string, error)
+	VolumeCreate(ctx context.Context, name string) error
+	ExtractTarGzToVolume(ctx context.Context, volumeName string, tarGzPath string, expectedRoot string) error
+	CreateContainer(ctx context.Context, imageRef string, name string, mounts []Mount) (string, error)
+	StartContainer(ctx context.Context, containerID string) error
 }
 
 type CLIClient struct{}
@@ -39,7 +47,7 @@ func (c *CLIClient) InspectContainer(ctx context.Context, containerID string) ([
 }
 
 func (c *CLIClient) ExportContainerFilesystem(ctx context.Context, containerID string, destTarPath string) error {
-	if err := os.MkdirAll(filepathDir(destTarPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destTarPath), 0o755); err != nil {
 		return err
 	}
 	f, err := os.Create(destTarPath)
@@ -77,12 +85,98 @@ func (c *CLIClient) ListVolumes(ctx context.Context) ([]string, error) {
 	return vols, nil
 }
 
-func filepathDir(p string) string {
-	// Avoid importing path/filepath for a single call in this file
-	for i := len(p) - 1; i >= 0; i-- {
-		if p[i] == '/' {
-			return p[:i]
-		}
+func (c *CLIClient) ImportImage(ctx context.Context, tarPath string, ref string) (string, error) {
+	args := []string{"import"}
+	if tarPath != "" {
+		args = append(args, tarPath)
 	}
-	return "."
+	if ref != "" {
+		args = append(args, ref)
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("docker import failed: %v: %s", err, stderr.String())
+	}
+	imageID := strings.TrimSpace(stdout.String())
+	return imageID, nil
+}
+
+func (c *CLIClient) VolumeCreate(ctx context.Context, name string) error {
+	cmd := exec.CommandContext(ctx, "docker", "volume", "create", name)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker volume create %s failed: %v: %s", name, err, stderr.String())
+	}
+	return nil
+}
+
+func (c *CLIClient) ExtractTarGzToVolume(ctx context.Context, volumeName string, tarGzPath string, expectedRoot string) error {
+	// Mount the tar as read-only and the volume at /restore; then extract and copy contents
+	cmd := exec.CommandContext(
+		ctx,
+		"docker", "run", "--rm",
+		"-v", fmt.Sprintf("%s:/restore", volumeName),
+		"-v", fmt.Sprintf("%s:/in.tgz:ro", tarGzPath),
+		"alpine:3.19",
+		"sh", "-c",
+		fmt.Sprintf("set -e; mkdir -p /tmp/e /restore; tar -xzf /in.tgz -C /tmp/e; if [ -d /tmp/e/%s ]; then cp -a /tmp/e/%s/. /restore/; else cp -a /tmp/e/. /restore/; fi", expectedRoot, expectedRoot),
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("extract to volume %s failed: %v: %s", volumeName, err, stderr.String())
+	}
+	return nil
+}
+
+func (c *CLIClient) CreateContainer(ctx context.Context, imageRef string, name string, mounts []Mount) (string, error) {
+	args := []string{"create"}
+	if name != "" {
+		args = append(args, "--name", name)
+	}
+	for _, m := range mounts {
+		flag := "-v"
+		mode := "rw"
+		if !m.RW {
+			mode = "ro"
+		}
+		var spec string
+		if m.Type == "bind" {
+			spec = fmt.Sprintf("%s:%s:%s", m.Source, m.Destination, mode)
+		} else if m.Type == "volume" {
+			// Use Name for volume
+			volName := m.Name
+			if volName == "" {
+				volName = m.Source
+			}
+			spec = fmt.Sprintf("%s:%s:%s", volName, m.Destination, mode)
+		} else {
+			continue
+		}
+		args = append(args, flag, spec)
+	}
+	args = append(args, imageRef)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("docker create failed: %v: %s", err, stderr.String())
+	}
+	containerID := strings.TrimSpace(stdout.String())
+	return containerID, nil
+}
+
+func (c *CLIClient) StartContainer(ctx context.Context, containerID string) error {
+	cmd := exec.CommandContext(ctx, "docker", "start", containerID)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker start failed: %v: %s", err, stderr.String())
+	}
+	return nil
 }

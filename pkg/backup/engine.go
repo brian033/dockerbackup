@@ -1,11 +1,15 @@
 package backup
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/brian033/dockerbackup/internal/errors"
@@ -190,7 +194,93 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 }
 
 func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreRequest) (*RestoreResult, error) {
-	return nil, errors.ErrNotImplemented
+	// Extract backup to temp dir
+	tmpDir, err := os.MkdirTemp("", "dockerbackup_restore_*")
+	if err != nil {
+		return nil, &errors.OperationError{Op: "create temp dir", Err: err}
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if err := e.archiveHandler.ExtractArchive(ctx, request.BackupPath, tmpDir); err != nil {
+		return nil, &errors.OperationError{Op: "extract backup", Err: err}
+	}
+
+	// Read container.json to recover mounts and name
+	containerJSONPath := filepath.Join(tmpDir, "container.json")
+	b, err := os.ReadFile(containerJSONPath)
+	if err != nil {
+		return nil, &errors.OperationError{Op: "read container.json", Err: err}
+	}
+	info, err := docker.ParseContainerInfo(b)
+	if err != nil {
+		return nil, &errors.OperationError{Op: "parse container.json", Err: err}
+	}
+
+	// Import filesystem to new image
+	fsTarPath := filepath.Join(tmpDir, "filesystem.tar")
+	imageRef := ""
+	if _, err := os.Stat(fsTarPath); err == nil {
+		imgID, err := e.dockerClient.ImportImage(ctx, fsTarPath, "")
+		if err != nil {
+			return nil, &errors.OperationError{Op: "docker import image", Err: err}
+		}
+		imageRef = imgID
+	} else {
+		return nil, &errors.OperationError{Op: "filesystem.tar missing", Err: err}
+	}
+
+	// Restore volumes and bind mounts
+	volsDir := filepath.Join(tmpDir, "volumes")
+	_ = volsDir
+
+	// Prepare mounts for new container
+	var mounts []docker.Mount
+	for _, m := range info.Mounts {
+		if m.Type == "volume" {
+			// Ensure volume exists
+			if err := e.dockerClient.VolumeCreate(ctx, m.Name); err != nil {
+				return nil, &errors.OperationError{Op: fmt.Sprintf("create volume %s", m.Name), Err: err}
+			}
+			// Restore from volumes/<name>.tar.gz (if present)
+			volTarGz := filepath.Join(tmpDir, "volumes", fmt.Sprintf("%s.tar.gz", m.Name))
+			if _, err := os.Stat(volTarGz); err == nil {
+				if err := e.dockerClient.ExtractTarGzToVolume(ctx, m.Name, volTarGz, m.Name); err != nil {
+					return nil, &errors.OperationError{Op: fmt.Sprintf("restore volume %s", m.Name), Err: err}
+				}
+			}
+			mounts = append(mounts, docker.Mount{Name: m.Name, Destination: m.Destination, Type: "volume", RW: m.RW})
+		} else if m.Type == "bind" {
+			// Extract bind tarball if present
+			base := filepath.Base(m.Source)
+			bindName := fmt.Sprintf("bind_%s", safeName(base))
+			bindTarGz := filepath.Join(tmpDir, "volumes", fmt.Sprintf("%s.tar.gz", bindName))
+			if _, err := os.Stat(bindTarGz); err == nil {
+				// Ensure host path exists
+				if err := os.MkdirAll(m.Source, 0o755); err != nil {
+					return nil, &errors.OperationError{Op: fmt.Sprintf("mkdir bind path %s", m.Source), Err: err}
+				}
+				if err := extractTarGzToHost(ctx, bindTarGz, m.Source, base); err != nil {
+					return nil, &errors.OperationError{Op: fmt.Sprintf("restore bind mount %s", m.Source), Err: err}
+				}
+			}
+			mounts = append(mounts, docker.Mount{Source: m.Source, Destination: m.Destination, Type: "bind", RW: m.RW})
+		}
+	}
+
+	// Create container with restored mounts
+	newName := info.Name
+	if request.Options.ContainerName != "" {
+		newName = request.Options.ContainerName
+	}
+	containerID, err := e.dockerClient.CreateContainer(ctx, imageRef, newName, mounts)
+	if err != nil {
+		return nil, &errors.OperationError{Op: "docker create", Err: err}
+	}
+	if request.Options.Start {
+		if err := e.dockerClient.StartContainer(ctx, containerID); err != nil {
+			return nil, &errors.OperationError{Op: "docker start", Err: err}
+		}
+	}
+	return &RestoreResult{RestoredID: containerID}, nil
 }
 
 func (e *DefaultBackupEngine) Validate(ctx context.Context, backupPath string) (*ValidationResult, error) {
@@ -268,4 +358,62 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func extractTarGzToHost(ctx context.Context, tarGzPath string, destDir string, expectedRoot string) error {
+	f, err := os.Open(tarGzPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		name := hdr.Name
+		if expectedRoot != "" {
+			// strip the root dir prefix
+			if strings.HasPrefix(name, expectedRoot+"/") {
+				name = strings.TrimPrefix(name, expectedRoot+"/")
+			}
+		}
+		outPath := filepath.Join(destDir, name)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(outPath, os.FileMode(hdr.Mode)); err != nil {
+				return err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				_ = out.Close()
+				return err
+			}
+			if err := out.Close(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
