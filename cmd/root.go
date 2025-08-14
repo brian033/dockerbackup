@@ -105,6 +105,9 @@ func (c *compositeClient) ListProjectContainers(ctx context.Context, project str
 func (c *compositeClient) ListProjectContainersByLabel(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
 	return c.cli.ListProjectContainersByLabel(ctx, project)
 }
+func (c *compositeClient) TagImage(ctx context.Context, sourceRef, targetRef string) error {
+	return c.cli.TagImage(ctx, sourceRef, targetRef)
+}
 
 func Execute() {
 	log := logger.New()

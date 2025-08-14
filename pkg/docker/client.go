@@ -31,6 +31,7 @@ type DockerClient interface {
 	// Image fidelity
 	ImageSave(ctx context.Context, imageRef string, destTarPath string) error
 	ImageLoad(ctx context.Context, tarPath string) error
+	TagImage(ctx context.Context, sourceRef, targetRef string) error
 
 	// Ensure resources exist with original options (SDK preferred)
 	EnsureVolume(ctx context.Context, cfg VolumeConfig) error
@@ -310,6 +311,16 @@ func (c *CLIClient) ImageLoad(ctx context.Context, tarPath string) error {
 	return nil
 }
 
+func (c *CLIClient) TagImage(ctx context.Context, sourceRef, targetRef string) error {
+	cmd := exec.CommandContext(ctx, "docker", "tag", sourceRef, targetRef)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker tag %s %s failed: %v: %s", sourceRef, targetRef, err, stderr.String())
+	}
+	return nil
+}
+
 func (c *CLIClient) HostIPs(ctx context.Context) ([]string, error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -395,14 +406,20 @@ func (c *CLIClient) ListProjectContainersByLabel(ctx context.Context, project st
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	refs := []ProjectContainerRef{}
 	for _, line := range lines {
-		if strings.TrimSpace(line) == "" { continue }
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
 		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 { continue }
+		if len(parts) != 2 {
+			continue
+		}
 		id := parts[0]
 		name := parts[1]
 		svc := name
 		us := strings.Split(name, "_")
-		if len(us) >= 3 && us[0] == project { svc = us[1] }
+		if len(us) >= 3 && us[0] == project {
+			svc = us[1]
+		}
 		refs = append(refs, ProjectContainerRef{Service: svc, ID: id, ContainerName: name})
 	}
 	return refs, nil

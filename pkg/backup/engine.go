@@ -533,6 +533,10 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 			return nil, &errors.OperationError{Op: "filesystem.tar missing", Err: err}
 		}
 	}
+	// If cj.Config.Image looks like repo:tag and we loaded/imported an image ID, retag the ID to that name
+	if cj.Config != nil && cj.Config.Image != "" && imageRef != "" {
+		_ = e.dockerClient.TagImage(ctx, imageRef, cj.Config.Image)
+	}
 
 	// Load saved volume and network configs if present
 	volCfgs := []docker.VolumeConfig{}
