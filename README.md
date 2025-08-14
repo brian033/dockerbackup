@@ -115,12 +115,23 @@ dockerbackup validate <backup_file>
 dockerbackup dry-run-restore <backup_file>
 ```
 
-- `dry-run-restore` shows a summary plan and hints for ports, networks, volumes, mounts, and env.
-- For more detail in logs (all commands), enable verbose output:
+#### Dry-run detail levels
 
-```bash
-DOCKERBACKUP_DEBUG=1 dockerbackup dry-run-restore <backup_file>
-```
+- **Basic (default)**: plan + summary counts extracted from `container.json` and a list of volume archives.
+  - Shows number of env vars, port bindings, mounts, attached networks.
+  - Example:
+
+  ```bash
+  dockerbackup dry-run-restore /tmp/my_backup.tar.gz
+  ```
+
+- **Verbose**: enable verbose logs for more context (steps, file paths) via environment variable:
+
+  ```bash
+  DOCKERBACKUP_DEBUG=1 dockerbackup dry-run-restore /tmp/my_backup.tar.gz
+  ```
+
+  This will include additional INFO logs for extraction and planning steps. Future versions may add a `--diff` mode to print full mapping previews (ports/networks/mounts/env) line-by-line.
 
 ## Single Container Backup Process
 
