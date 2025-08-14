@@ -85,7 +85,9 @@ func (f *fakeDockerClient) ListProjectContainers(ctx context.Context, project st
 func (f *fakeDockerClient) ListProjectContainersByLabel(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
 	return nil, nil
 }
-func (f *fakeDockerClient) TagImage(ctx context.Context, sourceRef, targetRef string) error { return nil }
+func (f *fakeDockerClient) TagImage(ctx context.Context, sourceRef, targetRef string) error {
+	return nil
+}
 
 type fakeDockerClientRestore struct {
 	createdImageRef   string
@@ -156,7 +158,9 @@ func (f *fakeDockerClientRestore) ListProjectContainers(ctx context.Context, pro
 func (f *fakeDockerClientRestore) ListProjectContainersByLabel(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
 	return nil, nil
 }
-func (f *fakeDockerClientRestore) TagImage(ctx context.Context, sourceRef, targetRef string) error { return nil }
+func (f *fakeDockerClientRestore) TagImage(ctx context.Context, sourceRef, targetRef string) error {
+	return nil
+}
 
 type fakeDockerClientWithInspect struct {
 	fakeDockerClient
@@ -483,7 +487,9 @@ func TestRestore_AutoRelaxIPs_ClearsIPAMOnConflict(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(work, "container.json"), b, 0o644)
 	_ = os.WriteFile(filepath.Join(work, "filesystem.tar"), []byte("tar"), 0o644)
 	backupFile := filepath.Join(t.TempDir(), "backup.tar.gz")
-	if err := arch.CreateArchive(ctx, []archive.ArchiveSource{{Path: work, DestPath: "."}}, backupFile); err != nil { t.Fatalf("create archive: %v", err) }
+	if err := arch.CreateArchive(ctx, []archive.ArchiveSource{{Path: work, DestPath: "."}}, backupFile); err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
 
 	// Call restore with auto-relax-ips; since our ContainerJSON in the test lacks NetworkSettings, this is a smoke test to ensure no crash
 	_, err := engine.Restore(ctx, RestoreRequest{BackupPath: backupFile, Options: RestoreOptions{AutoRelaxIPs: true}})
@@ -491,5 +497,5 @@ func TestRestore_AutoRelaxIPs_ClearsIPAMOnConflict(t *testing.T) {
 		// acceptable to fail on docker import since we don't actually implement import in fake
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_ = net.IPv4(127,0,0,1) // silence unused import if optimized
+	_ = net.IPv4(127, 0, 0, 1) // silence unused import if optimized
 }

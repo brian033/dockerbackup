@@ -118,6 +118,7 @@ dockerbackup dry-run-restore <backup_file>
 #### Dry-run detail levels
 
 - **Basic (default)**: plan + summary counts extracted from `container.json` and a list of volume archives.
+
   - Shows number of env vars, port bindings, mounts, attached networks.
   - Example:
 

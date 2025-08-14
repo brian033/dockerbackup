@@ -45,8 +45,10 @@ func NewTarArchiveHandler() *TarArchiveHandler {
 	return &TarArchiveHandler{compressionLevel: DefaultCompressionLevel}
 }
 
+// SetCompressionLevel accepts any level supported by gzip (HuffmanOnly..BestCompression),
+// including NoCompression (0) and DefaultCompression (-1).
 func (h *TarArchiveHandler) SetCompressionLevel(level int) {
-	if level >= gzip.HuffmanOnly && level <= gzip.BestCompression {
+	if level >= gzip.HuffmanOnly && level <= gzip.BestCompression || level == gzip.DefaultCompression || level == gzip.NoCompression {
 		h.compressionLevel = level
 	}
 }
@@ -65,15 +67,9 @@ func (h *TarArchiveHandler) CreateArchive(ctx context.Context, sources []Archive
 	}
 	defer func() { _ = outFile.Close() }()
 
-	var gzWriter *gzip.Writer
-	if h.compressionLevel != 0 {
-		w, err := gzip.NewWriterLevel(outFile, h.compressionLevel)
-		if err != nil {
-			return err
-		}
-		gzWriter = w
-	} else {
-		gzWriter = gzip.NewWriter(outFile)
+	gzWriter, err := gzip.NewWriterLevel(outFile, h.compressionLevel)
+	if err != nil {
+		return err
 	}
 	defer func() { _ = gzWriter.Close() }()
 

@@ -37,7 +37,9 @@ func (c *DryRunRestoreCmd) Execute(ctx context.Context, args []string) error {
 	backupFile := args[0]
 	h := archive.NewTarArchiveHandler()
 	entries, err := h.ListArchive(ctx, backupFile)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	fmt.Println("Plan:")
 	fmt.Println("- Extract backup to temp dir (dry-run)")
 	fmt.Println("- Load image.tar if present; else import filesystem.tar")
@@ -45,14 +47,24 @@ func (c *DryRunRestoreCmd) Execute(ctx context.Context, args []string) error {
 	fmt.Println("- Recreate container with mounts, ports, env, and networking")
 
 	has := map[string]bool{}
-	for _, e := range entries { has[e.Path] = true }
-	for _, e := range entries { if len(e.Path) > 8 && e.Path[:8] == "volumes/" && filepath.Ext(e.Path) == ".gz" { fmt.Printf("  * volume archive: %s\n", e.Path) } }
+	for _, e := range entries {
+		has[e.Path] = true
+	}
+	for _, e := range entries {
+		if len(e.Path) > 8 && e.Path[:8] == "volumes/" && filepath.Ext(e.Path) == ".gz" {
+			fmt.Printf("  * volume archive: %s\n", e.Path)
+		}
+	}
 
 	// Extract to temp dir for richer diff
 	tmp, err := os.MkdirTemp("", "dockerbackup_dryrun_*")
-	if err != nil { return err }
-	defer func(){ _ = os.RemoveAll(tmp) }()
-	if err := h.ExtractArchive(ctx, backupFile, tmp); err != nil { return err }
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	if err := h.ExtractArchive(ctx, backupFile, tmp); err != nil {
+		return err
+	}
 	// Read container.json if present
 	cjPath := filepath.Join(tmp, "container.json")
 	if b, err := os.ReadFile(cjPath); err == nil {
