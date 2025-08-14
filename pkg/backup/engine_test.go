@@ -81,6 +81,9 @@ func (f *fakeDockerClient) HostIPs(ctx context.Context) ([]string, error) {
 func (f *fakeDockerClient) ListProjectContainers(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
 	return nil, nil
 }
+func (f *fakeDockerClient) ListProjectContainersByLabel(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
+	return nil, nil
+}
 
 type fakeDockerClientRestore struct {
 	createdImageRef   string
@@ -146,6 +149,9 @@ func (f *fakeDockerClientRestore) HostIPs(ctx context.Context) ([]string, error)
 	return []string{"127.0.0.1", "0.0.0.0"}, nil
 }
 func (f *fakeDockerClientRestore) ListProjectContainers(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
+	return nil, nil
+}
+func (f *fakeDockerClientRestore) ListProjectContainersByLabel(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
 	return nil, nil
 }
 

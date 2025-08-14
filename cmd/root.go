@@ -102,6 +102,9 @@ func (c *compositeClient) ContainerState(ctx context.Context, containerID string
 func (c *compositeClient) ListProjectContainers(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
 	return c.cli.ListProjectContainers(ctx, project)
 }
+func (c *compositeClient) ListProjectContainersByLabel(ctx context.Context, project string) ([]docker.ProjectContainerRef, error) {
+	return c.cli.ListProjectContainersByLabel(ctx, project)
+}
 
 func Execute() {
 	log := logger.New()

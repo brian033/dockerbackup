@@ -95,21 +95,22 @@ type backupMetadata struct {
 func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest) (*BackupResult, error) {
 	if request.TargetType == TargetCompose {
 		projectPath := request.ComposeProjectPath
-		if projectPath == "" {
-			projectPath = "."
-		}
+		if projectPath == "" { projectPath = "." }
 		// Determine project name
 		projectName := request.ProjectName
 		if projectName == "" {
-			// Try to read compose name or use directory basename
-			projectName = filepath.Base(projectPath)
+			// Try to read compose name
+			for _, name := range []string{"docker-compose.yml", "docker-compose.yaml"} {
+				if b, err := os.ReadFile(filepath.Join(projectPath, name)); err == nil {
+					if n := compose.ParseProjectName(b); n != "" { projectName = n; break }
+				}
+			}
+			if projectName == "" { projectName = filepath.Base(projectPath) }
 		}
 		// Prepare working dir
 		workDir, err := os.MkdirTemp("", fmt.Sprintf("dockerbackup_compose_%s_*", safeName(projectName)))
-		if err != nil {
-			return nil, &errors.OperationError{Op: "create temp dir", Err: err}
-		}
-		defer func() { _ = os.RemoveAll(workDir) }()
+		if err != nil { return nil, &errors.OperationError{Op: "create temp dir", Err: err} }
+		defer func(){ _ = os.RemoveAll(workDir) }()
 
 		composeDir := filepath.Join(workDir, "compose-files")
 		containersDir := filepath.Join(workDir, "containers")
@@ -123,17 +124,18 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 		// Copy compose files
 		for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "docker-compose.override.yml", ".env"} {
 			src := filepath.Join(projectPath, name)
-			if b, err := os.ReadFile(src); err == nil {
-				_ = os.WriteFile(filepath.Join(composeDir, name), b, 0o644)
-			}
+			if b, err := os.ReadFile(src); err == nil { _ = os.WriteFile(filepath.Join(composeDir, name), b, 0o644) }
 		}
 
-		// Discover project containers
-		refs, err := e.dockerClient.ListProjectContainers(ctx, projectName)
-		if err != nil {
-			return nil, &errors.OperationError{Op: "list project containers", Err: err}
+		// Discover project containers: prefer label-based, fallback to name heuristic
+		refs, err := e.dockerClient.ListProjectContainersByLabel(ctx, projectName)
+		if err != nil || len(refs) == 0 {
+			refs, _ = e.dockerClient.ListProjectContainers(ctx, projectName)
 		}
-		// Backup each service container into containers/<service>/service.tar.gz
+		if len(refs) == 0 {
+			return nil, &errors.OperationError{Op: "discover project containers", Err: fmt.Errorf("no containers found for project %s", projectName)}
+		}
+		// Backup each service container
 		serviceNames := make([]string, 0, len(refs))
 		for _, r := range refs {
 			serviceNames = append(serviceNames, r.Service)
@@ -142,9 +144,7 @@ func (e *DefaultBackupEngine) Backup(ctx context.Context, request BackupRequest)
 			outTar := filepath.Join(svcDir, "container.tar.gz")
 			builder := NewBackupOptionsBuilder().WithOutput(outTar).WithCompression(0)
 			_, err := e.Backup(ctx, BackupRequest{TargetType: TargetContainer, ContainerID: r.ID, Options: builder.Build()})
-			if err != nil {
-				return nil, err
-			}
+			if err != nil { return nil, err }
 		}
 
 		// Aggregate networks used by the containers
@@ -671,7 +671,9 @@ func (e *DefaultBackupEngine) Restore(ctx context.Context, request RestoreReques
 			ipam := ns.IPAMConfig
 			// simple conflict check: if IPAMConfig has IPv4 address and subnet overlaps with an existing interface network, mark conflict
 			if ipam != nil && ipam.IPv4Address != "" {
-				if conflictWithHostIPv4(ipam.IPv4Address) { conflictingStaticIP = true }
+				if conflictWithHostIPv4(ipam.IPv4Address) {
+					conflictingStaticIP = true
+				}
 			}
 			if request.Options.ReassignIPs || (request.Options.AutoRelaxIPs && conflictingStaticIP) {
 				ep.IPAMConfig = nil
@@ -974,13 +976,17 @@ func primaryIPv4OfInterface(ifName string) (string, error) {
 
 func conflictWithHostIPv4(addr string) bool {
 	ip := net.ParseIP(addr).To4()
-	if ip == nil { return false }
+	if ip == nil {
+		return false
+	}
 	ifs, _ := net.Interfaces()
 	for _, it := range ifs {
 		addrs, _ := it.Addrs()
 		for _, a := range addrs {
 			if ipn, ok := a.(*net.IPNet); ok {
-				if ipn.IP.To4() != nil && ipn.Contains(ip) { return true }
+				if ipn.IP.To4() != nil && ipn.Contains(ip) {
+					return true
+				}
 			}
 		}
 	}

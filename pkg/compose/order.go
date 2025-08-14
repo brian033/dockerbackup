@@ -7,6 +7,7 @@ import (
 )
 
 type composeFile struct {
+	Name     string             `yaml:"name"`
 	Services map[string]service `yaml:"services"`
 }
 
@@ -61,4 +62,12 @@ func OrderFromComposeYAML(data []byte) (order []string, names []string) {
 		sort.Strings(order)
 	}
 	return order, names
+}
+
+func ParseProjectName(data []byte) string {
+	var cf composeFile
+	if err := yaml.Unmarshal(data, &cf); err != nil {
+		return ""
+	}
+	return cf.Name
 }

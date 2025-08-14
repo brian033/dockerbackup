@@ -46,6 +46,7 @@ type DockerClient interface {
 	HostIPs(ctx context.Context) ([]string, error)
 	ContainerState(ctx context.Context, containerID string) (status string, healthStatus string, err error)
 	ListProjectContainers(ctx context.Context, project string) ([]ProjectContainerRef, error)
+	ListProjectContainersByLabel(ctx context.Context, project string) ([]ProjectContainerRef, error)
 }
 
 type CLIClient struct{}
@@ -378,6 +379,30 @@ func (c *CLIClient) ListProjectContainers(ctx context.Context, project string) (
 		if len(us) >= 3 && us[0] == project {
 			svc = us[1]
 		}
+		refs = append(refs, ProjectContainerRef{Service: svc, ID: id, ContainerName: name})
+	}
+	return refs, nil
+}
+
+func (c *CLIClient) ListProjectContainersByLabel(ctx context.Context, project string) ([]ProjectContainerRef, error) {
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label=com.docker.compose.project="+project, "--format", "{{.ID}}\t{{.Names}}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("docker ps compose label failed: %v: %s", err, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	refs := []ProjectContainerRef{}
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" { continue }
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 { continue }
+		id := parts[0]
+		name := parts[1]
+		svc := name
+		us := strings.Split(name, "_")
+		if len(us) >= 3 && us[0] == project { svc = us[1] }
 		refs = append(refs, ProjectContainerRef{Service: svc, ID: id, ContainerName: name})
 	}
 	return refs, nil
